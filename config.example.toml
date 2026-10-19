@@ -1,0 +1,10 @@
+# 复制成 config.toml 再改；命令行参数优先级更高
+
+udp_port = 5555          # 游戏 Data Out 填的端口（FH6 官方要求避开 5200~5300）
+http_port = 8000         # 网页端口，手机打开 http://电脑IP:8000
+# game = "fh6"           # 324 字节包分不出 FH4/5/6，可以在这里固定
+tire_temp_unit = "F"     # 游戏发来的胎温单位（社区共识是华氏度）
+live_hz = 20             # 实时面板刷新频率
+db_path = "data/forza.db"
+rec_dir = "recordings"
+# forward = ["127.0.0.1:20777"]   # 同时把原始包转发给 SimHub 等其他程序

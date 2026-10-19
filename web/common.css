@@ -1,0 +1,93 @@
+/* 全站公用样式：颜色变量、顶部导航、基础排版。各页面自己的样式写在各自的 css 里。 */
+:root {
+  --bg: #0d0f12;
+  --panel: #171a1f;
+  --panel-2: #20242b;
+  --line: #2c313a;
+  --text: #e8eaed;
+  --muted: #8b929c;
+  --accent: #4ea1ff;      /* 主色 / 圈 A */
+  --accent-2: #ff9f43;    /* 对比色 / 圈 B */
+  --good: #2ecc71;        /* 变快 / 正常 */
+  --bad: #ff5c5c;         /* 变慢 / 异常 */
+  --warn: #f5c542;
+  --throttle: #2ecc71;
+  --brake: #ff5c5c;
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, select, input {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.good { color: var(--good); }
+.bad { color: var(--bad); }
+.warn { color: var(--warn); }
+
+/* 顶部导航 */
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.topnav .brand { font-weight: 700; margin-right: 8px; }
+.topnav a {
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+.topnav a.active { color: var(--text); background: var(--panel-2); }
+.topnav a:hover { text-decoration: none; color: var(--text); }
+.topnav .spacer { flex: 1; }
+.topnav .status-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted); display: inline-block; margin-right: 6px;
+}
+.topnav .status-dot.on { background: var(--good); }
+.topnav .status-dot.stale { background: var(--warn); }
+
+.page { max-width: 1200px; margin: 0 auto; padding: 16px; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.card h2, .card h3 { margin: 0 0 10px; font-size: 16px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+
+@media (max-width: 600px) {
+  .page { padding: 10px; }
+}

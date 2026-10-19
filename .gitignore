@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+recordings/
+samples/*.frec
+samples/*.frec.gz
+samples/*.truth.json
+config.toml
+*.db
+*.db-wal
+*.db-shm
