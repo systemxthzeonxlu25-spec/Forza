@@ -91,3 +91,6 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
 @media (max-width: 600px) {
   .page { padding: 10px; }
 }
+
+/* 带 hidden 属性的元素一律隐藏（否则页面里给元素设了 display 会把 hidden 盖掉） */
+[hidden] { display: none !important; }

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>圈速对比 · Forza 遥测</title>
+  <link rel="stylesheet" href="/common.css">
+  <link rel="stylesheet" href="/vendor/uPlot.min.css">
+  <link rel="stylesheet" href="/laps.css">
+</head>
+<body>
+<!-- 圈速列表 + 两圈对比。逻辑全在 laps.js，样式在 laps.css；数据来自 /api/laps、/api/compare -->
+<main class="page laps-page">
+
+  <!-- 整页加载失败 / 还没有任何圈 -->
+  <section class="card state-card" id="page-state" hidden></section>
+
+  <!-- 筛选：赛道、车（都能直接改名） -->
+  <section class="card filters" id="filters" hidden>
+    <div class="filter-group" id="track-group">
+      <span class="flabel">赛道</span>
+      <span class="fctl" id="track-ctl"></span>
+    </div>
+    <div class="filter-group" id="car-group">
+      <span class="flabel">车辆</span>
+      <span class="fctl" id="car-ctl"></span>
+    </div>
+    <label class="chk"><input type="checkbox" id="complete-only"> 只看完整圈</label>
+    <span class="grow"></span>
+    <span class="muted small" id="lap-count"></span>
+  </section>
+
+  <!-- 圈列表 -->
+  <section class="card" id="laps-card" hidden>
+    <div class="card-head">
+      <h2>圈列表</h2>
+      <span class="muted small">选 <b class="tag-a">A</b> 参考圈、<b class="tag-b">B</b> 要分析的圈，下面自动对比（默认：最新一圈 vs 最快圈）</span>
+    </div>
+    <div class="table-wrap">
+      <table class="lap-table" id="lap-table">
+        <thead>
+          <tr>
+            <th class="c-pick" title="参考圈">A</th>
+            <th class="c-pick" title="要分析的圈">B</th>
+            <th class="c-num">圈</th>
+            <th class="c-time">圈速</th>
+            <th class="c-delta">与最快差</th>
+            <th class="c-date">时间</th>
+            <th class="c-flags">标记</th>
+            <th class="c-note">备注</th>
+            <th class="c-act">操作</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 对比结果 -->
+  <section id="compare" hidden>
+    <div class="card cmp-head" id="cmp-head"></div>
+    <div class="cmp-state" id="cmp-state" hidden></div>
+    <div class="cmp-grid" id="cmp-body">
+      <div class="card cmp-charts">
+        <div class="chart-bar">
+          <div class="legend" id="chart-legend"></div>
+          <span class="grow"></span>
+          <span class="muted small" id="zoom-label">全圈</span>
+          <button class="small-btn" id="zoom-reset" hidden>看全圈</button>
+        </div>
+        <div class="readout mono" id="readout"></div>
+        <div id="charts"></div>
+        <div class="muted small chart-hint">在曲线上拖动选一段可放大，双击还原；点右侧的弯直接跳过去。</div>
+      </div>
+      <aside class="cmp-side">
+        <div class="card map-card">
+          <div class="card-head"><h3>赛道图</h3><span class="muted small">颜色 = B 在这里丢 / 赚时间</span></div>
+          <div class="map-wrap"><canvas id="map"></canvas></div>
+          <div class="map-legend small">
+            <span>B 赚时间</span><span class="ramp"></span><span>B 丢时间</span>
+          </div>
+        </div>
+        <div class="card seg-card">
+          <div class="card-head">
+            <h3>逐弯分析</h3>
+            <span class="grow"></span>
+            <span class="seg-sort" role="group" aria-label="排序">
+              <button class="small-btn on" data-sort="loss">按丢时间</button>
+              <button class="small-btn" data-sort="track">按赛道顺序</button>
+            </span>
+          </div>
+          <div class="seg-list" id="seg-list"></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<script src="/vendor/uPlot.iife.min.js"></script>
+<script src="/common.js"></script>
+<script src="/laps.js"></script>
+</body>
+</html>
