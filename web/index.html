@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <!-- iPhone 不支持网页全屏：“添加到主屏幕”后从主屏幕打开就没有浏览器地址栏 -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Forza 面板">
+  <title>实时面板 · Forza 遥测</title>
+  <link rel="stylesheet" href="/common.css">
+  <link rel="stylesheet" href="/live.css">
+</head>
+<body class="live-page mode-connecting">
+  <!-- 顶部导航由 common.js 的 Forza.nav() 插到最前面；横屏手机 / 全屏时隐藏，用右上角菜单按钮导航 -->
+  <div id="banners" class="banners"></div>
+
+  <main id="dash" class="dash">
+    <!-- 转速条 + 换挡灯 + 工具按钮 -->
+    <section class="w-rpm" id="w-rpm">
+      <div class="rpm-track" id="rpm-track">
+        <i class="rpm-fill" id="rpm-fill"></i>
+        <i class="rpm-ticks" id="rpm-ticks"></i>
+      </div>
+      <span class="rpm-num mono" id="rpm-val">0</span>
+      <button class="icon-btn" id="btn-fs" title="全屏" aria-label="全屏">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-menu" title="菜单 / 设置" aria-label="菜单">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+    </section>
+
+    <!-- 档位 + 车速 + 刹车/油门 + 方向 -->
+    <section class="w w-center">
+      <div class="c-pedal c-brake dash-only" title="刹车"><i id="brake-fill"></i></div>
+      <div class="c-gear dash-only na" id="gear-box"><span id="gear"></span></div>
+      <div class="c-pedal c-thr dash-only" title="油门"><i id="thr-fill"></i></div>
+      <div class="c-speed" id="speed-box" title="点一下切换 km/h / mph">
+        <span class="mono" id="speed">--</span><small id="speed-unit">km/h</small>
+      </div>
+      <div class="c-steer dash-only" title="方向">
+        <i class="steer-fill" id="steer-fill"></i><b class="steer-mid"></b>
+      </div>
+    </section>
+
+    <!-- 圈速 + 实时差距 -->
+    <section class="w w-lap dash-only">
+      <div class="lap-delta">
+        <div class="lbl">实时差距 <span class="muted" id="delta-ref"></span></div>
+        <div class="delta mono" id="delta">--</div>
+        <div class="delta-bar"><i id="delta-fill"></i><b></b></div>
+      </div>
+      <div class="lap-rows">
+        <div class="row big"><span class="lbl">本圈</span><span class="mono" id="lap-cur">--:--.---</span></div>
+        <div class="row"><span class="lbl">上圈</span><span class="mono" id="lap-last">--:--.---</span></div>
+        <div class="row"><span class="lbl">最快</span><span class="mono" id="lap-best">--:--.---</span></div>
+        <div class="row"><span class="lbl">预计</span><span class="mono" id="lap-pred">--:--.---</span></div>
+        <div class="row sub"><span id="lap-num">第 - 圈</span><span class="mono" id="lap-pos"></span></div>
+      </div>
+    </section>
+
+    <!-- 四个轮胎，按车上的位置摆：左前 右前 / 左后 右后（内容由 live.js 生成） -->
+    <section class="w w-tires" id="tires"></section>
+
+    <!-- G 球 + 其它数值 -->
+    <section class="w w-side">
+      <div class="gball-wrap"><canvas id="gball" aria-label="G 值摩擦圆"></canvas></div>
+      <div class="extras">
+        <div class="dash-only"><span class="lbl">燃油</span><b class="mono" id="x-fuel">--</b></div>
+        <div class="dash-only"><span class="lbl">功率</span><b class="mono" id="x-power">--</b></div>
+        <div class="dash-only"><span class="lbl">扭矩</span><b class="mono" id="x-torque">--</b></div>
+        <div class="dash-only"><span class="lbl">增压</span><b class="mono" id="x-boost">--</b></div>
+      </div>
+    </section>
+
+    <!-- 底部状态行 -->
+    <footer class="w-bar">
+      <span class="conn-dot" id="conn-dot"></span>
+      <span class="status-line" id="status-line">正在连接…</span>
+    </footer>
+
+    <!-- 暂停 / 数据中断：盖在面板中间的大字提示 -->
+    <div class="center-msg" id="center-msg" hidden></div>
+
+    <!-- 未连接服务 / 没有收到数据：带设置提示的遮罩（不盖住底部状态行） -->
+    <div class="overlay" id="overlay" hidden>
+      <div class="ov-card">
+        <h2 id="ov-title">正在连接…</h2>
+        <p class="ov-sub" id="ov-sub"></p>
+        <div id="ov-setup" hidden>
+          <p class="ov-p">在游戏设置里打开 <b>Data Out</b>（HUD / 游戏玩法 那一页的最下面）：</p>
+          <table class="ov-table">
+            <tr><td>Data Out</td><td><b>开（On）</b></td></tr>
+            <tr><td>IP 地址</td><td><b class="mono">127.0.0.1</b>（游戏和本程序在同一台电脑）<span id="ov-lanip"></span></td></tr>
+            <tr><td>端口</td><td><b class="mono" id="ov-port">5555</b></td></tr>
+            <tr><td>Packet Format</td><td><b>Car Dash</b>（只有 Motorsport 有这项）</td></tr>
+          </table>
+          <p class="ov-p muted" id="ov-note"></p>
+        </div>
+        <p class="ov-links"><a href="/connect.html">连接帮助 →</a></p>
+      </div>
+    </div>
+  </main>
+
+  <!-- 菜单：页面导航 + 本机设置 -->
+  <div class="menu" id="menu" hidden>
+    <div class="menu-card">
+      <div class="menu-head"><b>菜单</b><button id="menu-close" aria-label="关闭">关闭</button></div>
+      <nav class="menu-links">
+        <a href="/">实时面板</a>
+        <a href="/laps.html">圈速对比</a>
+        <a href="/tuning.html">调车诊断</a>
+        <a href="/connect.html">连接手机</a>
+      </nav>
+      <div class="menu-set">
+        <div class="set-row"><span>车速单位</span>
+          <span class="seg" id="set-unit"><button data-v="kmh">km/h</button><button data-v="mph">mph</button></span></div>
+        <div class="set-row"><span>刷新频率</span>
+          <span class="seg" id="set-hz"><button data-v="10">10</button><button data-v="20">20</button><button data-v="30">30</button></span></div>
+        <div class="set-row"><span>防息屏</span><span class="muted" id="set-wake">--</span></div>
+        <p class="muted small">这些设置只保存在这台设备上。刷新频率低一点更省电。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="/common.js"></script>
+  <script src="/live.js"></script>
+</body>
+</html>

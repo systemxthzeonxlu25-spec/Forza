@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0f12">
+  <title>连接手机 · Forza 遥测</title>
+  <link rel="stylesheet" href="/common.css">
+  <style>
+    /* 连接帮助页自己的少量样式 */
+    .cn-state { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+    .cn-state .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); display: inline-block; }
+    .cn-state .status-dot.on { background: var(--good); }
+    .cn-state .status-dot.stale { background: var(--warn); }
+    .urls { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+    .url-item { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px; text-align: center; min-width: 220px; }
+    .url-item.here { border-color: var(--accent); }
+    .qr { width: 196px; height: 196px; margin: 0 auto 8px; background: #fff; border-radius: 6px; padding: 6px; }
+    .qr svg { display: block; width: 100%; height: 100%; }
+    .url-item a { font-family: var(--mono); font-size: 14px; white-space: nowrap; }
+    .url-item .tag { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+    .game-table td:first-child { white-space: nowrap; font-weight: 600; }
+    .game-table td { vertical-align: top; font-size: 14px; }
+    .game-table .mono { color: var(--text); }
+    .tips { margin: 0; padding-left: 20px; }
+    .tips li { margin: 4px 0; }
+    code { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 5px; }
+    .table-wrap { overflow-x: auto; }
+    /* 窄屏（手机）：表格改成一游戏一块 */
+    @media (max-width: 640px) {
+      .game-table thead { display: none; }
+      .game-table tr { display: block; padding: 6px 0; border-bottom: 1px solid var(--line); }
+      .game-table td { display: block; border: none; padding: 1px 0; }
+      .game-table td[data-l]::before { content: attr(data-l) "："; color: var(--muted); }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="card">
+      <h2>手机打开实时面板</h2>
+      <p class="muted" style="margin:0">手机和这台电脑连<b>同一个 Wi-Fi / 局域网</b>，用手机相机扫码，或在手机浏览器里输入下面的地址。</p>
+      <div class="urls" id="urls"><span class="muted">正在读取本机地址…</span></div>
+      <p class="cn-state" id="cn-state" style="margin:12px 0 0"><span class="status-dot"></span><span>正在检查游戏数据…</span></p>
+    </div>
+
+    <div class="card">
+      <h2>游戏里怎么填（Data Out）</h2>
+      <p class="muted" style="margin:0 0 8px">在游戏设置里找到 Data Out（HUD / 游戏玩法 那一页的最下面），<b>Data Out = 开（On）</b>，再按下表填 IP 和端口：</p>
+      <div class="table-wrap">
+        <table class="game-table">
+          <thead><tr><th>游戏</th><th>IP 地址</th><th>端口</th><th>注意</th></tr></thead>
+          <tbody>
+            <tr><td>Forza Motorsport (2023)</td><td data-l="IP 地址"><span class="mono">127.0.0.1</span> 或 <span class="mono lan-ip">本机局域网 IP</span></td><td data-l="端口" class="mono udp-port">5555</td><td data-l="注意">Packet Format 选 <b>Car Dash</b></td></tr>
+            <tr><td>Forza Motorsport 7</td><td data-l="IP 地址"><span class="mono lan-ip">本机局域网 IP</span></td><td data-l="端口" class="mono udp-port">5555</td><td data-l="注意">不能填 127.0.0.1；Packet Format 选 <b>Car Dash</b></td></tr>
+            <tr><td>Forza Horizon 4 / 5</td><td data-l="IP 地址"><span class="mono">127.0.0.1</span> 或 <span class="mono lan-ip">本机局域网 IP</span></td><td data-l="端口" class="mono udp-port">5555</td><td data-l="注意">—</td></tr>
+            <tr><td>Forza Horizon 6</td><td data-l="IP 地址"><span class="mono">127.0.0.1</span> 或 <span class="mono lan-ip">本机局域网 IP</span></td><td data-l="端口" class="mono udp-port">5555</td><td data-l="注意">端口避开 <b>5200–5300</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin:8px 0 0;font-size:14px">游戏和本程序在同一台电脑：先填 127.0.0.1，收不到再改填局域网 IP。在 Xbox 或另一台电脑上玩：填运行本程序这台电脑的局域网 IP。Microsoft Store / Game Pass 版收不到数据，见 README 里的“回环豁免”。</p>
+    </div>
+
+    <div class="card">
+      <h2>手机打不开页面？</h2>
+      <ul class="tips">
+        <li>第一次运行时 Windows 防火墙会弹窗：勾选<b>专用网络</b>，允许 Python 访问。</li>
+        <li>错过了弹窗：Windows 安全中心 → 防火墙和网络保护 → 允许应用通过防火墙 → 给 <b>Python</b> 勾上“专用”；或者用管理员 PowerShell 放行 TCP <span class="mono http-port">8000</span> 端口：<br><code id="fw-cmd">New-NetFirewallRule -DisplayName "Forza Telemetry Web" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Private</code></li>
+        <li>电脑当前的网络要设成<b>专用网络</b>（设置 → 网络和 Internet → 网络配置文件类型）。</li>
+        <li>手机别连访客 Wi-Fi；路由器开了“AP 隔离 / 客户端隔离”也会挡住。</li>
+      </ul>
+    </div>
+  </main>
+
+  <script src="/common.js"></script>
+  <script src="/vendor/qrcode.js"></script>
+  <script src="/connect.js"></script>
+</body>
+</html>

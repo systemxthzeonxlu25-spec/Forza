@@ -1,0 +1,348 @@
+/* 实时面板（手机第二屏）：深色、高对比、大数字；手机竖屏 / 横屏 / 电脑都一屏放下、不滚动。
+   尺寸思路：外层用 grid 按比例分块（竖屏 / 横屏两套布局），每块是一个 size 容器，
+   里面的字号用容器单位 cqh / cqw（相对这一块的高 / 宽），所以屏幕多大字就多大，不会溢出。 */
+
+.live-page {
+  --gap: 6px;
+  --rpm-h: clamp(28px, 7vmin, 46px);
+  --bar-h: 20px;
+  --tire-cold: #3b82f6;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #000;               /* 纯黑：OLED 手机更省电、对比更高 */
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.live-page .topnav { flex: 0 0 auto; padding: 3px 8px; font-size: 13px; }
+.live-page .topnav a { padding: 4px 8px; }
+/* 横屏手机（高度很小）和全屏时隐藏顶部导航，右上角菜单按钮里有同样的链接 */
+@media (orientation: landscape) and (max-height: 540px) {
+  .live-page .topnav { display: none; }
+}
+.live-page.is-fs .topnav { display: none; }
+
+.lbl { color: var(--muted); font-weight: 500; }
+.small { font-size: 12px; }
+
+/* ---------------- 横幅（解码警告 / Sled 提示 / 防息屏提示） ---------------- */
+.banners { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: var(--gap) var(--gap) 0; }
+.banners:empty { display: none; }
+.banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border-radius: 8px; font-size: 13px; line-height: 1.3;
+}
+.banner .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.banner.open .txt { white-space: normal; }
+.banner .x { flex: 0 0 auto; background: none; border: none; color: inherit; opacity: .7; padding: 2px 6px; font-size: 16px; line-height: 1; }
+.banner.warn { background: #3a2f0b; color: #ffe08a; border: 1px solid #6b5514; }
+.banner.info { background: #0f2740; color: #cfe6ff; border: 1px solid #1d4b7a; }
+
+/* ---------------- 主网格 ---------------- */
+.dash {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  gap: var(--gap);
+  padding: var(--gap);
+  /* 默认 = 竖屏 */
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-rows: var(--rpm-h) minmax(0, 1.55fr) minmax(0, 0.8fr) minmax(0, 1.45fr) var(--bar-h);
+  grid-template-areas:
+    "rpm    rpm"
+    "center center"
+    "lap    lap"
+    "tires  side"
+    "bar    bar";
+}
+@media (orientation: landscape) {
+  .dash {
+    grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.3fr) minmax(0, 1.1fr) minmax(0, 0.8fr);
+    grid-template-rows: var(--rpm-h) minmax(0, 1fr) var(--bar-h);
+    grid-template-areas:
+      "rpm rpm    rpm   rpm"
+      "lap center tires side"
+      "bar bar    bar   bar";
+  }
+}
+
+.w {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  container-type: size;
+  transition: opacity .25s;
+}
+.w-center { grid-area: center; }
+.w-lap { grid-area: lap; }
+.w-tires { grid-area: tires; }
+.w-side { grid-area: side; }
+
+/* Sled 格式：没有 Dash 段的控件变灰 */
+.fmt-sled .dash-only { opacity: .2; filter: grayscale(1); }
+/* 暂停 / 数据中断：整体变暗 */
+.mode-paused .w, .mode-stale .w, .mode-paused .w-rpm, .mode-stale .w-rpm { opacity: .4; }
+
+/* ---------------- 转速条 + 换挡灯 ---------------- */
+.w-rpm { grid-area: rpm; display: flex; align-items: stretch; gap: var(--gap); min-width: 0; }
+.rpm-track {
+  position: relative; flex: 1 1 auto; min-width: 0;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+}
+.rpm-fill {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, #1f8f4e, var(--good));
+  transform-origin: left center; transform: scaleX(0);
+  will-change: transform;
+}
+.rpm-ticks {
+  position: absolute; inset: 0;
+  /* 每 1000 rpm 一条刻度线，宽度由 live.js 按最高转速设置 --tick */
+  background: repeating-linear-gradient(90deg, transparent 0 calc(var(--tick, 12.5%) - 2px), rgba(0, 0, 0, .55) calc(var(--tick, 12.5%) - 2px) var(--tick, 12.5%));
+}
+.rpm-warn .rpm-fill { background: linear-gradient(90deg, #b88a10, var(--warn)); }
+.rpm-shift .rpm-fill { background: var(--bad); animation: shiftflash .16s steps(1) infinite; }
+.rpm-shift .rpm-track { border-color: var(--bad); }
+.rpm-num {
+  flex: 0 0 auto; min-width: 4.6ch; align-self: center; text-align: right;
+  font-size: calc(var(--rpm-h) * .5); font-weight: 700;
+}
+.icon-btn {
+  flex: 0 0 auto; width: calc(var(--rpm-h) * 1.15); padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--panel-2); color: var(--text);
+}
+@keyframes shiftflash { 50% { opacity: .15; } }
+
+/* ---------------- 档位 / 车速 / 踏板 / 方向 ---------------- */
+.w-center {
+  display: grid;
+  grid-template-columns: clamp(14px, 7%, 44px) minmax(0, 1fr) clamp(14px, 7%, 44px);
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "brake gear  thr"
+    "brake speed thr"
+    "steer steer steer";
+  column-gap: 8px;
+  row-gap: 4px;
+  padding: 8px;
+}
+.c-gear {
+  grid-area: gear;
+  container-type: size;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 10px; min-height: 0;
+}
+#gear { font-size: min(118cqh, 66cqw); font-weight: 800; line-height: .82; letter-spacing: -.04em; }
+.c-gear.na #gear { font-size: min(16cqh, 14cqw); font-weight: 600; letter-spacing: 0; color: var(--muted); }
+.rpm-shift .c-gear { background: var(--bad); color: #000; animation: shiftflash .16s steps(1) infinite; }
+.c-speed {
+  grid-area: speed; display: flex; align-items: baseline; justify-content: center; gap: .25em;
+  line-height: 1; cursor: pointer;
+}
+#speed { font-size: 13vmin; font-size: min(22cqh, 19cqw); font-weight: 700; }
+#speed-unit { font-size: 4vmin; font-size: min(6.5cqh, 6cqw); color: var(--muted); }
+.c-pedal {
+  position: relative; background: var(--panel-2); border-radius: 6px; overflow: hidden;
+}
+.c-pedal i {
+  position: absolute; inset: 0; transform-origin: center bottom; transform: scaleY(0); will-change: transform;
+}
+.c-brake { grid-area: brake; }
+.c-thr { grid-area: thr; }
+.c-brake i { background: var(--brake); }
+.c-thr i { background: var(--throttle); }
+.c-steer {
+  grid-area: steer; position: relative; height: clamp(8px, 4cqh, 16px);
+  background: var(--panel-2); border-radius: 6px; overflow: hidden;
+}
+.steer-fill {
+  position: absolute; top: 0; bottom: 0; left: 50%; width: 50%;
+  background: var(--accent); transform-origin: left center; transform: scaleX(0); will-change: transform;
+}
+.steer-mid { position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: var(--text); opacity: .6; }
+
+/* ---------------- 圈速 + 实时差距 ---------------- */
+.w-lap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  column-gap: 14px;
+  padding: 6px 12px;
+  align-items: center;
+}
+.lap-delta { min-width: 0; }
+.lap-delta .lbl { font-size: 3.4vmin; font-size: min(11cqh, 4cqw); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.delta { font-size: 11vmin; font-size: min(44cqh, 14cqw); font-weight: 800; line-height: 1.05; white-space: nowrap; }
+.delta.good { color: var(--good); }
+.delta.bad { color: var(--bad); }
+.delta-bar { position: relative; height: clamp(6px, 7cqh, 12px); background: var(--panel-2); border-radius: 4px; overflow: hidden; margin-top: 2px; }
+.delta-bar i {
+  position: absolute; top: 0; bottom: 0; left: 50%; width: 50%;
+  transform-origin: left center; transform: scaleX(0); background: var(--muted); will-change: transform;
+}
+.delta-bar i.good { background: var(--good); }
+.delta-bar i.bad { background: var(--bad); }
+.delta-bar b { position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: var(--text); opacity: .5; }
+.lap-rows { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.lap-rows .row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  font-size: 3.6vmin; font-size: min(13cqh, 4.6cqw); line-height: 1.22; white-space: nowrap;
+}
+.lap-rows .row.big { font-size: min(19cqh, 6.2cqw); font-weight: 700; }
+.lap-rows .row.sub { color: var(--muted); }
+#lap-pos { color: var(--text); font-weight: 700; }
+
+@media (orientation: landscape) {
+  .w-lap {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    align-items: start;
+    padding: 8px 10px;
+  }
+  .lap-delta .lbl { font-size: min(5cqh, 9cqw); }
+  .delta { font-size: min(22cqh, 29cqw); }
+  .delta-bar { height: clamp(6px, 3cqh, 14px); }
+  .lap-rows { align-self: center; justify-content: center; }
+  .lap-rows .row { font-size: min(6.5cqh, 9.5cqw); }
+  .lap-rows .row.big { font-size: min(9cqh, 11.5cqw); }
+}
+
+/* ---------------- 轮胎 ---------------- */
+.w-tires {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 6px;
+  padding: 6px;
+}
+.tire {
+  container-type: size;
+  min-width: 0; min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(6px, 9%, 14px);
+  grid-template-areas: "main susp";
+  gap: 4px;
+  border-radius: 8px;
+  transition: box-shadow .1s;
+}
+.tire.right { grid-template-columns: clamp(6px, 9%, 14px) minmax(0, 1fr); grid-template-areas: "susp main"; }
+.tire.lost { box-shadow: 0 0 0 2px var(--bad); }          /* 综合滑移 > 1：这个轮胎没抓地了 */
+.t-main { grid-area: main; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 2px; }
+.t-temp {
+  flex: 1 1 auto; min-height: 0;
+  display: grid; grid-template-rows: auto minmax(0, 1fr); justify-items: center; align-items: center;
+  border-radius: 7px; background: var(--panel-2); color: #0b0d10; overflow: hidden;
+}
+.t-temp .t-name { justify-self: start; padding: 2px 6px 0; font-size: min(9.5cqh, 12cqw); font-weight: 700; opacity: .7; line-height: 1.1; }
+.t-temp b { font-size: min(27cqh, 34cqw); font-weight: 800; line-height: 1; }
+.t-temp b small { font-size: .45em; font-weight: 600; vertical-align: .85em; margin-left: .05em; }
+.t-temp.na { color: var(--muted); }
+.t-row {
+  flex: 0 0 auto; display: flex; justify-content: space-between; align-items: baseline;
+  padding: 0 5px; border-radius: 5px;
+  font-size: min(11.5cqh, 13cqw); line-height: 1.3;
+}
+.t-row span { color: var(--muted); }
+.t-row.lost { background: var(--bad); color: #fff; }
+.t-row.lost span { color: #fff; }
+.t-susp { grid-area: susp; position: relative; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+.t-susp i {
+  position: absolute; inset: 0; background: var(--accent);
+  transform-origin: center bottom; transform: scaleY(0); will-change: transform;
+}
+.t-susp.bottom i { background: var(--bad); }
+.t-susp.bottom { box-shadow: 0 0 0 1px var(--bad); }
+
+/* ---------------- G 球 + 其它 ---------------- */
+.w-side { display: flex; flex-direction: column; padding: 6px; gap: 4px; }
+.gball-wrap { flex: 1 1 auto; min-height: 0; container-type: size; display: flex; align-items: center; justify-content: center; }
+#gball { display: block; width: min(100cqw, 100cqh); height: min(100cqw, 100cqh); }
+.extras { flex: 0 0 auto; display: flex; flex-direction: column; padding: 0 4px; }
+.extras > div { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; min-width: 0; line-height: 1.4; }
+.extras .lbl { font-size: clamp(11px, 2.2vmin, 15px); white-space: nowrap; }
+.extras b { font-size: clamp(12px, 2.6vmin, 18px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------------- 底部状态行 ---------------- */
+.w-bar { grid-area: bar; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.status-line { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.conn-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.mode-live .conn-dot, .mode-paused .conn-dot { background: var(--good); }
+.mode-stale .conn-dot, .mode-nodata .conn-dot { background: var(--warn); }
+.mode-wsdown .conn-dot { background: var(--bad); }
+
+/* ---------------- 中间大字（暂停 / 数据中断） ---------------- */
+.center-msg {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 5;
+  max-width: calc(100% - 24px);
+  padding: 10px 20px; border-radius: 14px; border: 1px solid var(--line);
+  background: rgba(0, 0, 0, .8); text-align: center; pointer-events: none;
+  font-size: clamp(18px, 5vmin, 36px); font-weight: 700; line-height: 1.25;
+}
+.center-msg small { display: block; margin-top: 4px; font-size: clamp(12px, 2.6vmin, 16px); font-weight: 400; color: var(--muted); }
+
+/* ---------------- 遮罩（未连接服务 / 没有收到数据） ---------------- */
+.overlay {
+  position: absolute; z-index: 10;
+  left: 0; right: 0; top: calc(var(--rpm-h) + var(--gap) * 2); bottom: calc(var(--bar-h) + var(--gap));
+  display: flex; align-items: center; justify-content: center;
+  padding: 8px; overflow: auto;
+  background: rgba(0, 0, 0, .93);
+}
+.ov-card { max-width: 560px; width: 100%; margin: auto; padding: 4px 8px; }
+.ov-card h2 { margin: 0 0 4px; font-size: clamp(20px, 5.5vmin, 30px); }
+.mode-wsdown .ov-card h2 { color: var(--bad); }
+.mode-nodata .ov-card h2 { color: var(--warn); }
+.ov-sub { margin: 0 0 8px; color: var(--muted); }
+.ov-p { margin: 6px 0; font-size: 14px; }
+.ov-table { font-size: 14px; }
+.ov-table td { padding: 3px 8px 3px 0; vertical-align: top; }
+.ov-table td:first-child { color: var(--muted); white-space: nowrap; }
+.ov-links { margin: 8px 0 0; }
+@media (orientation: landscape) and (max-height: 540px) {
+  .ov-card h2 { font-size: 20px; }
+  .ov-p, .ov-table, .ov-sub { font-size: 13px; }
+  .ov-table td { padding: 1px 8px 1px 0; }
+  .ov-p { margin: 3px 0; }
+}
+
+/* ---------------- 菜单 ---------------- */
+.menu {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: flex-start; justify-content: flex-end;
+  background: rgba(0, 0, 0, .6); padding: 8px;
+  padding-top: max(8px, env(safe-area-inset-top));
+}
+.menu-card {
+  width: min(340px, 100%); max-height: 100%; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+}
+.menu-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.menu-links { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+.menu-links a {
+  display: block; padding: 9px 10px; border-radius: 8px; background: var(--panel-2); color: var(--text); text-align: center;
+}
+.menu-links a:hover { text-decoration: none; border-color: var(--accent); }
+.set-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; padding: 5px 12px; }
+.seg button:first-child { border-radius: 8px 0 0 8px; }
+.seg button:last-child { border-radius: 0 8px 8px 0; }
+.seg button + button { border-left: none; }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ---------------- 小提示 ---------------- */
+.toast {
+  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60;
+  max-width: calc(100% - 24px); padding: 8px 14px; border-radius: 10px;
+  background: #222831; border: 1px solid var(--line); font-size: 14px; text-align: center;
+}
