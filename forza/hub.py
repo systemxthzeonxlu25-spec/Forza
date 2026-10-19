@@ -32,7 +32,7 @@ class Hub:
         self.packets = 0
         self.sizes: Counter[int] = Counter()
         self.last_packet_at: float | None = None   # time.monotonic()
-        self._recent: deque[float] = deque(maxlen=400)  # 最近的到达时刻，算每秒包数
+        self._recent: deque[float] = deque(maxlen=2000)  # 最近的到达时刻，算每秒包数（倍速回放时可能远超 144 包/秒）
         self._fwd_sock: socket.socket | None = None
         self._fwd_addrs: list[tuple[str, int]] = []
         for item in forward or []:
