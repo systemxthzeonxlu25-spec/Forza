@@ -2,9 +2,21 @@
 from __future__ import annotations
 
 import socket
+import time
+
+_cache: tuple[float, list[str]] = (0.0, [])
 
 
 def lan_ips() -> list[str]:
+    global _cache
+    if time.monotonic() - _cache[0] < 30 and _cache[1]:
+        return list(_cache[1])
+    ips = _lan_ips()
+    _cache = (time.monotonic(), ips)
+    return list(ips)
+
+
+def _lan_ips() -> list[str]:
     ips: list[str] = []
     try:
         # UDP connect 不会真的发包，只是让系统选出“默认出口网卡”的 IP

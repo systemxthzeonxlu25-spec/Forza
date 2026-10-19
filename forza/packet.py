@@ -152,7 +152,7 @@ FORMAT_BY_SIZE: dict[int, PacketFormat] = {f.size: f for f in FORMATS.values()}
 # 未知包长时可以尝试的布局（按包长从长到短，能装下才试）
 _GUESS_CANDIDATES = ["fm2023_dash", "fh_legacy", "fm7_dash"]
 
-_INT_FIELDS = {n for f in FORMATS.values() for n, c in f.fields if c in "iIHBb"}
+_INT_FIELDS = {n.split("#")[0] for f in FORMATS.values() for n, c in f.fields if c in "iIHBb"}
 
 
 def unpack(data: bytes, fmt: PacketFormat) -> dict:

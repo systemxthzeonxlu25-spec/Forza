@@ -39,6 +39,7 @@ RESTART_PREV_RT = 3.0          # ……且之前超过这个值，判定为重�
 FINAL_LAP_RATIO = 0.95         # 最后一圈距离达到整圈的这个比例才算完整
 SPRINT_FINISH_RATIO = 0.95     # 冲刺赛距离达到路线长度的这个比例才算跑完
 DIST_MISMATCH = 0.2            # DistanceTraveled 和速度积分差超过 20% 就改用积分距离
+MIN_SPRINT_M = 300.0           # 短于这个距离的“冲刺赛”直接丢弃（多半是赛道赛第一圈就重开了）
 
 
 @dataclass
@@ -246,7 +247,8 @@ class LapDetector:
             self._commit_pending()
         if ev and cur and cur.rows:
             dist = self._buf_distance(cur)
-            if ev.boundaries == 0 and ev.family == "fh" and ev.saw_position and cur.lap_number == 0:
+            if (ev.boundaries == 0 and ev.family == "fh" and ev.saw_position and cur.lap_number == 0
+                    and dist >= MIN_SPRINT_M):
                 # FH 冲刺赛：整段存成一条记录，是否跑完由保存方按路线长度判断
                 self._emit(cur, kind="sprint", lap_time=cur.last_t, time_source="measured",
                            complete=True, reason=reason)

@@ -134,6 +134,9 @@ class LapData:
         out = {}
         for k in names:
             if k in self.ch:
-                a = self.ch[k][::step]
-                out[k] = [None if not np.isfinite(x) else round(float(x), 4) for x in a]
+                a = np.round(self.ch[k][::max(1, step)].astype(np.float64), 4)
+                vals = a.tolist()
+                if not np.isfinite(a).all():
+                    vals = [x if np.isfinite(x) else None for x in vals]
+                out[k] = vals
         return {"meta": self.meta, "channels": out}
