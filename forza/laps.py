@@ -52,6 +52,7 @@ class _LapBuf:
     idist: list[float] = field(default_factory=list)   # 每行对应的速度积分距离
     int_dist: float = 0.0
     last_row_t: float = -1.0
+    last_t: float = 0.0          # 最近一帧的圈内时间（采样被限频跳过的帧也算，量圈时用它）
     last_rt: float = 0.0
     max_speed: float = 0.0
     flags: set[str] = field(default_factory=set)
@@ -71,6 +72,7 @@ class _LapBuf:
         del self.idist[k:]
         self.int_dist = self.idist[-1] if self.idist else 0.0
         self.last_row_t = self.rows[-1][0] if self.rows else -1.0
+        self.last_t = max(self.last_row_t, 0.0)
         self.flags.add("rewind")
 
 
@@ -188,6 +190,7 @@ class LapDetector:
         if 0 < dt < 1.0:
             cur.int_dist += fr.speed * dt
         cur.last_rt = fr.race_time
+        cur.last_t = t
         if cur.rows and t - cur.last_row_t < MIN_SAMPLE_DT - 1e-6:
             return
         cur.rows.append(frame_sample(fr, t, fr.distance - cur.start_dist))
@@ -233,7 +236,7 @@ class LapDetector:
             lap_time = end.last_lap
         source = "game"
         if lap_time is None:
-            lap_time = buf.rows[-1][0] if buf.rows else 0.0
+            lap_time = buf.last_t
             source = "measured"
         self._emit(buf, kind="lap", lap_time=lap_time, time_source=source, complete=True)
 
@@ -245,11 +248,11 @@ class LapDetector:
             dist = self._buf_distance(cur)
             if ev.boundaries == 0 and ev.family == "fh" and ev.saw_position and cur.lap_number == 0:
                 # FH 冲刺赛：整段存成一条记录，是否跑完由保存方按路线长度判断
-                self._emit(cur, kind="sprint", lap_time=cur.rows[-1][0], time_source="measured",
+                self._emit(cur, kind="sprint", lap_time=cur.last_t, time_source="measured",
                            complete=True, reason=reason)
             elif ev.lap_lengths and dist >= FINAL_LAP_RATIO * statistics.median(ev.lap_lengths):
                 # 最后一圈游戏没给 LapNumber + 1，但距离够了，算完整圈（圈时自己量）
-                self._emit(cur, kind="lap", lap_time=cur.rows[-1][0], time_source="measured",
+                self._emit(cur, kind="lap", lap_time=cur.last_t, time_source="measured",
                            complete=True, reason=reason)
             else:
                 self.dropped_partial += 1

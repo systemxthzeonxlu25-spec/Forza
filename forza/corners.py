@@ -48,10 +48,12 @@ def resample_by_distance(lap: LapData, step: float = 1.0, channels: list[str] | 
 
 
 def _smooth(a: np.ndarray, n: int) -> np.ndarray:
+    """滑动平均。两端用边缘值填充（直接补 0 会把圈首圈尾的坐标拉偏，凭空多出假弯）。"""
     if n <= 1 or len(a) < n:
         return a
     k = np.ones(n) / n
-    return np.convolve(a, k, mode="same")
+    pad = n // 2
+    return np.convolve(np.pad(a, (pad, n - 1 - pad), mode="edge"), k, mode="valid")
 
 
 def curvature(rs: dict[str, np.ndarray]) -> np.ndarray:
@@ -112,7 +114,9 @@ def detect_corners(lap: LapData, step: float = 1.0) -> list[dict]:
         if length < MIN_CORNER_LEN_M or math.degrees(turn) < MIN_HEADING_DEG:
             continue
         seg_speed = rs["speed"][a:b + 1]
-        apex = a + int(np.argmin(seg_speed))
+        # 弯心 = 最低速平台的中点（恒定半径的弯速度是一段平台，直接取 argmin 会落在平台起点）
+        low = np.nonzero(seg_speed <= seg_speed.min() + 1.0 / 3.6)[0]
+        apex = a + int((low[0] + low[-1]) // 2)
         steer_mean = float(np.mean(rs["steer"][a:b + 1]))
         corners.append({
             "start_m": float(grid[a]),

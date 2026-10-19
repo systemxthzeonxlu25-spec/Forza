@@ -126,8 +126,12 @@ def cmd_import(args) -> None:
 def cmd_fake(args) -> None:
     from .fake import write_fake_recording
 
-    out = Path(args.output or f"samples/demo_{args.format}_{args.scenario}.frec")
-    truth = write_fake_recording(out, args.format, args.scenario, laps=args.laps, hz=args.hz, seed=args.seed,
+    fmt = args.format
+    if args.scenario in ("sprint", "freeroam") and not fmt.startswith("fh"):
+        fmt = "fh"   # 冲刺赛 / 自由漫游只有 Horizon 有
+        print("冲刺赛 / 自由漫游是 Horizon 才有的玩法，包格式自动改用 fh（324 字节）")
+    out = Path(args.output or f"samples/demo_{fmt}_{args.scenario}.frec")
+    truth = write_fake_recording(out, fmt, args.scenario, laps=args.laps, hz=args.hz, seed=args.seed,
                                  issues=not args.clean, rewind=args.rewind, restart=args.restart,
                                  total_size=args.size)
     print(f"已生成 {out}")
