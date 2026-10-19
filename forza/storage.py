@@ -84,6 +84,16 @@ CREATE INDEX IF NOT EXISTS idx_laps_session ON laps(session_id);
 _LAP_COLUMNS = ["session_id", "track_id", "game", "family", "fmt", "car_ordinal", "car_class", "car_pi",
                 "lap_number", "kind", "lap_time", "time_source", "distance_m", "max_speed", "is_complete"]
 
+# 查圈元数据时用的 SELECT（不带 samples 大字段）
+_META_SELECT = (
+    "l.id, l.session_id, l.track_id, l.game, l.family, l.fmt, l.car_ordinal, l.car_class, "
+    "l.car_pi, l.lap_number, l.kind, l.lap_time, l.time_source, l.distance_m, l.max_speed, "
+    "l.is_complete, l.flags, l.meta, l.note, l.sample_count, l.created_at, "
+    "t.name AS track_name, c.name AS car_name "
+    "FROM laps l LEFT JOIN tracks t ON t.id = l.track_id "
+    "LEFT JOIN cars c ON c.game = l.game AND c.car_ordinal = l.car_ordinal"
+)
+
 # 赛道指纹匹配阈值
 TRACK_START_RADIUS_M = 60.0   # 起点坐标相距这么近算同一个起点
 TRACK_LENGTH_TOL = 0.04       # 圈长差在 4% 以内算同一条赛道（区分共用起点线的不同布局）
@@ -230,12 +240,7 @@ class Store:
     def list_laps(self, *, track_id: int | None = None, car_ordinal: int | None = None,
                   game: str | None = None, session_id: int | None = None,
                   complete_only: bool = False, limit: int = 500) -> list[dict]:
-        sql = ("SELECT l.id, l.session_id, l.track_id, l.game, l.family, l.fmt, l.car_ordinal, l.car_class, "
-               "l.car_pi, l.lap_number, l.kind, l.lap_time, l.time_source, l.distance_m, l.max_speed, "
-               "l.is_complete, l.flags, l.meta, l.note, l.sample_count, l.created_at, "
-               "t.name AS track_name, c.name AS car_name "
-               "FROM laps l LEFT JOIN tracks t ON t.id = l.track_id "
-               "LEFT JOIN cars c ON c.game = l.game AND c.car_ordinal = l.car_ordinal WHERE 1=1")
+        sql = f"SELECT {_META_SELECT} WHERE 1=1"
         args: list = []
         for col, val in (("l.track_id", track_id), ("l.car_ordinal", car_ordinal), ("l.game", game),
                          ("l.session_id", session_id)):
@@ -255,11 +260,7 @@ class Store:
     def list_laps_by_ids(self, ids: list[int]) -> list[dict]:
         if not ids:
             return []
-        rows = self._q(
-            f"""SELECT l.*, t.name AS track_name, c.name AS car_name FROM laps l
-                LEFT JOIN tracks t ON t.id = l.track_id
-                LEFT JOIN cars c ON c.game = l.game AND c.car_ordinal = l.car_ordinal
-                WHERE l.id IN ({','.join('?' * len(ids))})""", ids)
+        rows = self._q(f"SELECT {_META_SELECT} WHERE l.id IN ({','.join('?' * len(ids))})", ids)
         return [self._row_meta(r) for r in rows]
 
     def get_lap(self, lap_id: int) -> LapData | None:
