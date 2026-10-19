@@ -1,0 +1,149 @@
+/* 调车诊断页（tuning.html）。颜色变量来自 common.css。 */
+
+.tn h1 { font-size: 20px; margin: 0; }
+.tn h2 { font-size: 15px; margin: 0 0 10px; }
+.tn-small { font-size: 13px; }
+.tn code { font-family: var(--mono); font-size: 13px; background: var(--panel-2); padding: 1px 5px; border-radius: 5px; }
+
+/* ---------- 选圈 ---------- */
+.tn-title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 12px; }
+.tn-sub { font-size: 13px; }
+.tn-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; }
+.tn-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; min-width: 0; }
+.tn-field-lap { flex: 1 1 320px; max-width: 560px; }
+.tn-field-manual { flex: 1 1 220px; max-width: 320px; }
+.tn-field select, .tn-field input { width: 100%; min-width: 0; font-size: 15px; }
+.tn-check { display: flex; align-items: center; gap: 6px; font-size: 14px; padding-bottom: 2px; white-space: nowrap; }
+.tn-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.tn-check select { padding: 4px 6px; }
+#tn-go { min-width: 84px; }
+#tn-go[disabled] { opacity: .6; cursor: progress; }
+.tn-msg { margin: 10px 0 0; font-size: 13px; }
+.tn-msg.err { color: var(--bad); }
+
+/* ---------- 概况 ---------- */
+.tn-head-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 12px; }
+.tn-head-title strong { font-size: 17px; }
+.tn-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
+.tn-stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.tn-stat .k { color: var(--muted); font-size: 12px; }
+.tn-stat .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tn-stat .v small { font-weight: 400; color: var(--muted); font-size: 12px; }
+.tn-tires { display: grid; grid-template-columns: auto auto; gap: 1px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tn-tires .hot { color: var(--warn); }
+.tn-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.tn-laps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; font-size: 13px; }
+.tn-laps a { background: var(--panel-2); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--text); }
+.tn-laps a.bad { opacity: .6; }
+
+/* ---------- 布局：桌面两栏，手机一栏（地图在问题列表前面） ---------- */
+.tn-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 14px; align-items: start; }
+/* 右栏跟着滚动；比屏幕高时在栏内滚动，免得下半截看不到 */
+.tn-side { position: sticky; top: 10px; max-height: calc(100vh - 20px); overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.tn-side > .card:last-child { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .tn-grid { display: flex; flex-direction: column; gap: 0; align-items: stretch; }
+  .tn-main, .tn-side { display: contents; }
+  .tn-map-card { order: 1; }
+  .tn-findings { order: 2; }
+  .tn-checks { order: 3; }
+  .tn-dq { order: 4; }
+  .tn-na { order: 5; }
+}
+
+/* ---------- 严重程度 / 置信度 徽章 ---------- */
+.badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 1px 9px; font-size: 12px;
+  font-weight: 600; border: 1px solid currentColor; white-space: nowrap; line-height: 1.6; }
+.badge.sev-alert { color: var(--bad); }
+.badge.sev-warn { color: var(--warn); }
+.badge.sev-info { color: var(--accent); }
+.badge::before { content: ""; width: 7px; height: 7px; background: currentColor; }
+.badge.sev-alert::before { clip-path: polygon(50% 0, 100% 100%, 0 100%); width: 9px; height: 8px; }
+.badge.sev-warn::before { transform: rotate(45deg); width: 6px; height: 6px; }
+.badge.sev-info::before { border-radius: 50%; }
+.badge.plain { color: var(--muted); border-color: var(--line); font-weight: 500; }
+.badge.plain::before { display: none; }
+.badge.conf-high { color: var(--good); border-color: var(--line); }
+.badge.conf-medium { color: var(--text); border-color: var(--line); }
+.badge.conf-low { color: var(--muted); border-color: var(--line); }
+.badge.conf-high::before, .badge.conf-medium::before, .badge.conf-low::before { display: none; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.dot.sev-alert { background: var(--bad); }
+.dot.sev-warn { background: var(--warn); }
+.dot.sev-info { background: var(--accent); }
+
+/* ---------- 问题卡片 ---------- */
+.fd { border-left: 4px solid var(--line); scroll-margin-top: 12px; transition: box-shadow .3s; }
+.fd.sev-alert { border-left-color: var(--bad); }
+.fd.sev-warn { border-left-color: var(--warn); }
+.fd.sev-info { border-left-color: var(--accent); }
+.fd.flash { box-shadow: 0 0 0 2px var(--accent); }
+.fd-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.fd-num { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border-radius: 50%;
+  font-size: 12px; font-weight: 700; color: #0d0f12; }
+.fd-num.sev-alert { background: var(--bad); }
+.fd-num.sev-warn { background: var(--warn); }
+.fd-num.sev-info { background: var(--accent); }
+.fd-title { font-size: 17px; margin: 0 0 4px; }
+.fd-summary { margin: 0 0 10px; }
+.fd-locs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.fd-loc { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--panel-2); max-width: 100%;
+  overflow-wrap: anywhere; text-align: left; }
+.fd-loc.on { border-color: var(--accent); color: var(--accent); }
+.fd-loc.static { cursor: default; }
+.fd-loc.static:hover { border-color: var(--line); }
+.fd h4 { margin: 12px 0 4px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.fd ul, .fd ol { margin: 0; padding-left: 20px; }
+.fd li { margin: 3px 0; overflow-wrap: anywhere; }
+.fd-ev li { font-size: 14px; font-variant-numeric: tabular-nums; }
+.fd-ev li.sub { list-style: none; margin-left: -4px; color: var(--muted); font-size: 13px; }
+.fd-ev li.rule { color: var(--muted); }
+.fd-basis { margin-top: 10px; background: var(--panel-2); border-radius: 8px; padding: 8px 12px; }
+.fd-basis summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.fd-basis dl { margin: 8px 0 2px; font-size: 14px; }
+.fd-basis dt { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.fd-basis dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+.fd-caveat { font-size: 13px; margin: 8px 0 0; }
+
+.tn-empty { text-align: center; padding: 26px 14px; }
+.tn-empty strong { display: block; font-size: 17px; margin-bottom: 6px; }
+
+/* ---------- 检查项 ---------- */
+.tn-check-list { list-style: none; margin: 0; padding: 0; }
+.tn-check-list li { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 2px 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.tn-check-list li:first-child { border-top: none; padding-top: 0; }
+.tn-check-list .st { font-size: 12px; font-weight: 600; padding-top: 2px; }
+.tn-check-list .st-found { color: var(--warn); }
+.tn-check-list .st-ok { color: var(--good); }
+.tn-check-list .st-skipped { color: var(--muted); }
+.tn-check-list .nm { font-weight: 600; font-size: 14px; }
+.tn-check-list .nt { grid-column: 2; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* ---------- 地图 ---------- */
+.tn-map-box { position: relative; }
+#tn-map { display: block; width: 100%; height: 280px; border-radius: 8px; background: var(--bg); touch-action: manipulation; }
+.tn-tip { position: absolute; z-index: 2; pointer-events: none; max-width: 240px; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 9px; font-size: 13px; box-shadow: 0 4px 14px rgba(0, 0, 0, .4); }
+.tn-tip b { display: block; }
+.tn-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 13px; }
+.tn-map-card .tn-small { margin: 6px 0 0; }
+
+/* ---------- 数据情况 / 判断不了的 ---------- */
+.tn-dq ul, .tn-na ul { margin: 0; padding-left: 18px; font-size: 14px; }
+.tn-dq li, .tn-na li { margin: 6px 0; overflow-wrap: anywhere; }
+.tn-dq li.error { color: var(--bad); }
+.tn-dq li.warn { color: var(--warn); }
+.tn-na li b { display: block; }
+.tn-na li span { display: block; color: var(--muted); font-size: 13px; }
+.tn-na li em { display: block; font-style: normal; font-size: 13px; }
+
+.tn-foot { font-size: 13px; margin: 6px 2px 24px; }
+
+@media (max-width: 600px) {
+  .tn-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .tn-stat { padding: 6px 9px; }
+  .tn-stat .v { font-size: 15px; }
+  .fd-title { font-size: 16px; }
+  .tn-head-title strong { font-size: 16px; }
+}

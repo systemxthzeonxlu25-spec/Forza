@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>调车诊断 · Forza 遥测</title>
+  <link rel="stylesheet" href="/common.css">
+  <link rel="stylesheet" href="/tuning.css">
+</head>
+<body>
+  <main class="page tn">
+    <!-- 选圈 -->
+    <section class="card tn-controls">
+      <div class="tn-title-row">
+        <h1>调车诊断</h1>
+        <span class="muted tn-sub">每条结论都附实测数据和判断依据；数据不够时直接说“数据不足”</span>
+      </div>
+      <form id="tn-form" class="tn-row" autocomplete="off">
+        <label class="tn-field tn-field-lap" id="tn-pick-wrap">
+          <span class="muted">选一圈</span>
+          <select id="tn-lap"><option value="">加载圈列表中…</option></select>
+        </label>
+        <label class="tn-field tn-field-manual" id="tn-manual-wrap" hidden>
+          <span class="muted">圈号（多圈用逗号隔开）</span>
+          <input id="tn-manual" type="text" inputmode="numeric" placeholder="例如 12 或 12,13,14">
+        </label>
+        <label class="tn-check" id="tn-multi-wrap">
+          <input type="checkbox" id="tn-multi">
+          <span>合并最近</span>
+          <select id="tn-multi-n" aria-label="合并圈数">
+            <option>2</option><option selected>3</option><option>5</option><option>8</option><option>10</option>
+          </select>
+          <span>圈</span>
+        </label>
+        <button type="submit" class="primary" id="tn-go">诊断</button>
+      </form>
+      <p class="muted tn-msg" id="tn-msg" hidden></p>
+    </section>
+
+    <!-- 本圈概况 -->
+    <section class="card tn-head" id="tn-head" hidden></section>
+
+    <div class="tn-grid">
+      <div class="tn-main">
+        <section class="tn-findings" id="tn-findings"></section>
+        <section class="card tn-checks" id="tn-checks" hidden>
+          <h2>检查了什么</h2>
+          <ul class="tn-check-list" id="tn-check-list"></ul>
+        </section>
+      </div>
+      <aside class="tn-side">
+        <section class="card tn-map-card" id="tn-map-card" hidden>
+          <h2>赛道图</h2>
+          <div class="tn-map-box" id="tn-map-box">
+            <canvas id="tn-map" aria-label="赛道小地图，标出各问题的位置"></canvas>
+            <div class="tn-tip" id="tn-tip" hidden></div>
+          </div>
+          <div class="tn-legend">
+            <span><i class="dot sev-alert"></i>重点</span>
+            <span><i class="dot sev-warn"></i>注意</span>
+            <span><i class="dot sev-info"></i>提示</span>
+          </div>
+          <p class="muted tn-small" id="tn-map-note">数字 = 问题卡片的编号，色段 = 发生的路段。整圈性的问题（如胎温）不在图上标。</p>
+        </section>
+        <section class="card tn-dq" id="tn-dq" hidden>
+          <h2>数据情况</h2>
+          <ul id="tn-dq-list"></ul>
+        </section>
+        <section class="card tn-na" id="tn-na" hidden>
+          <h2>Data Out 判断不了的</h2>
+          <p class="muted tn-small">下面这些 Data Out 根本不发送，所以这里不做判断，也不瞎猜：</p>
+          <ul id="tn-na-list"></ul>
+        </section>
+      </aside>
+    </div>
+
+    <p class="muted tn-foot">
+      说明：这些规则都是经验判断（启发式），不是游戏官方标准，建议只是“常见的调整方向”。
+      所有阈值都在 <code>forza/tuning_rules.toml</code>（带中文说明），改完保存、重新诊断即可生效；
+      <a href="/api/tuning/rules" target="_blank" rel="noopener">查看当前阈值</a>。
+    </p>
+  </main>
+  <script src="/common.js"></script>
+  <script src="/tuning.js"></script>
+</body>
+</html>
