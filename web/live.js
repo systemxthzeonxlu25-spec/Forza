@@ -9,8 +9,14 @@
   const TIRE_OPT_LOW_C = 75;    // 理想区间下限：从这里开始是绿色
   const TIRE_OPT_HIGH_C = 100;  // 理想区间上限：超过开始变黄
   const TIRE_HOT_C = 115;       // 过热：红
-  const SHIFT_WARN = 0.92;      // 转速 ≥ 最高转速 × 92%：转速条变黄
+  const SHIFT_WARN = 0.92;      // 没有实测换挡点时：转速 ≥ 最高转速 × 92% 转速条变黄
   const SHIFT_NOW = 0.97;       // ≥ 97%：红色闪烁，该换挡了
+  const SHIFT_EARLY_RPM = 300;  // 有实测换挡点（/api/powertrain）时：提前这么多转变黄，到点闪红
+  const CAR_INFO_REFRESH_MS = 60000;   // 换挡点 / 当前调校版本多久重新拉一次（换车时立刻拉）
+  const SUMMARY_SHOW_MS = 10000;       // 本圈小结卡片显示多久
+  const SUMMARY_MAX_AGE_S = 120;       // 刚打开页面时，比这更早的小结只放进菜单、不弹卡片
+  const SUMMARY_KEEP = 20;             // 菜单里最多列几条小结
+  const REC_POLL_MS = 2000;            // 菜单开着时多久刷新一次录制状态
   const SUSP_BOTTOM = 0.95;     // 归一化悬挂行程 ≥ 0.95：快压到底了（标红）
   const SLIP_LIMIT = 1.0;       // 滑移率 / 侧偏角 / 综合滑移 |x| > 1：失去抓地（标红）
   const G_TRAIL_S = 1.5;        // G 球拖尾长度（秒）
@@ -30,7 +36,9 @@
   ];
 
   // ======================= 本机设置 =======================
-  const DEFAULTS = { unit: "kmh", hz: 20, awakeHintDone: false, dismissed: {} };
+  // deltaRef：实时差距对比“本场最快”(session) 还是“历史最快 PB”(pb)；seenSummary：最近看过的小结 id（不重复弹）
+  const DEFAULTS = { unit: "kmh", hz: 20, awakeHintDone: false, dismissed: {}, deltaRef: "session",
+    seenSummary: null, snapMin: 10 };
   const settings = loadSettings();
 
   function loadSettings() {
@@ -53,7 +61,7 @@
     rpmFill: $("rpm-fill"), rpmTicks: $("rpm-ticks"), rpmVal: $("rpm-val"), rpmRow: $("w-rpm"),
     gear: $("gear"), gearBox: $("gear-box"), speed: $("speed"), speedUnit: $("speed-unit"), speedBox: $("speed-box"),
     brake: $("brake-fill"), thr: $("thr-fill"), steer: $("steer-fill"),
-    delta: $("delta"), deltaFill: $("delta-fill"), deltaRef: $("delta-ref"),
+    delta: $("delta"), deltaFill: $("delta-fill"), deltaRef: $("delta-ref"), deltaNote: $("delta-note"),
     lapCur: $("lap-cur"), lapLast: $("lap-last"), lapBest: $("lap-best"), lapPred: $("lap-pred"),
     lapNum: $("lap-num"), lapPos: $("lap-pos"),
     fuel: $("x-fuel"), power: $("x-power"), torque: $("x-torque"), boost: $("x-boost"),
@@ -62,6 +70,12 @@
     overlay: $("overlay"), ovTitle: $("ov-title"), ovSub: $("ov-sub"), ovSetup: $("ov-setup"),
     ovPort: $("ov-port"), ovLanIp: $("ov-lanip"), ovNote: $("ov-note"),
     menu: $("menu"), toast: $("toast"),
+    sumCard: $("sumcard"), scTitle: $("sc-title"), scDelta: $("sc-delta"), scSum: $("sc-sum"), scTop: $("sc-top"),
+    scNote: $("sc-note"), scTimer: $("sc-timer"), sumList: $("sum-list"),
+    refHint: $("ref-hint"), setShift: $("set-shift"),
+    secSetup: $("sec-setup"), setupCur: $("setup-cur"), setupForm: $("setup-form"), setupName: $("setup-name"),
+    setupNote: $("setup-note"), setupMsg: $("setup-msg"), setupSave: $("setup-save"),
+    recState: $("rec-state"), btnRec: $("btn-rec"), btnSnap: $("btn-snap"), recResult: $("rec-result"),
   };
 
   // 轮胎卡片：按车上的位置摆（左前 右前 / 左后 右后），悬挂条在靠车身中线的一侧
@@ -189,6 +203,7 @@
     let msg;
     try { msg = JSON.parse(text); } catch (_) { return; }
     if (msg.status) status = msg.status;
+    if (msg.last_summary) onSummary(msg.last_summary, msg.t);
     if (msg.type === "frame" && msg.frame) {
       latest = msg;
       const f = msg.frame;
@@ -228,8 +243,16 @@
       E.rpmTicks._max = maxr;
       E.rpmTicks.style.setProperty("--tick", `${(1000 / maxr) * 100}%`);
     }
-    setCls(body, "rpm-warn", frac >= SHIFT_WARN && frac < SHIFT_NOW);
-    setCls(body, "rpm-shift", frac >= SHIFT_NOW);
+    const sh = shiftThresholds(f, maxr);
+    const rpm = num(f.rpm) ? f.rpm : 0;
+    setCls(body, "rpm-warn", sh !== null && rpm >= sh.warn && rpm < sh.now);
+    setCls(body, "rpm-shift", sh !== null && rpm >= sh.now);
+    if (sh && E.rpmTicks._shift !== sh.now) {          // 转速条上标出这一挡的换挡点
+      E.rpmTicks._shift = sh.now;
+      E.rpmRow.style.setProperty("--shift-at", maxr > 0 ? `${clamp(sh.now / maxr, 0, 1) * 100}%` : "200%");
+    }
+    setCls(body, "shift-measured", !!sh && sh.src === "measured");
+    watchCar(f);
 
     // 档位 / 车速
     const gear = f.gear && f.gear !== "-" ? f.gear : "";
@@ -293,20 +316,25 @@
       setText(E.lapNum, f.has_dash ? "第 - 圈" : "Sled 格式没有圈速");
       setText(E.lapPos, "");
       setText(E.deltaRef, "");
+      setHidden(E.deltaNote, true);
       return;
     }
-    const d = lap.delta;
+    const ref = pickRef(lap);
+    const d = ref.delta;
     setText(E.delta, num(d) ? Forza.fmtDelta(d, 2) : "--");
     setCls(E.delta, "good", num(d) && d < 0);
     setCls(E.delta, "bad", num(d) && d > 0);
+    setCls(E.delta, "tentative", num(d) && ref.tentative);
     setTf(E.deltaFill, `scaleX(${num(d) ? clamp(d / DELTA_BAR_S, -1, 1).toFixed(3) : 0})`);
     setCls(E.deltaFill, "good", num(d) && d < 0);
     setCls(E.deltaFill, "bad", num(d) && d > 0);
-    setText(E.deltaRef, num(lap.ref_time) ? `对比 ${Forza.fmtLap(lap.ref_time)}` : "");
+    setText(E.deltaRef, ref.label);
+    setText(E.deltaNote, ref.note);
+    setHidden(E.deltaNote, !ref.note);
     setText(E.lapCur, Forza.fmtLap(lap.time));
     setText(E.lapLast, Forza.fmtLap(lap.last));
     setText(E.lapBest, Forza.fmtLap(lap.best));
-    setText(E.lapPred, Forza.fmtLap(lap.predicted));
+    setText(E.lapPred, Forza.fmtLap(ref.predicted));
     let label;
     if (!lap.active && !num(lap.race_time)) label = "没有比赛计时";   // FH 自由漫游
     else label = `第 ${num(lap.number) ? lap.number + 1 : "-"} 圈`;
@@ -458,6 +486,9 @@
     const parts = [];
     if (mode === "wsdown" || mode === "connecting") parts.push("服务未连接");
     if (mode === "nodata" && status) parts.push(`等待游戏数据（UDP 端口 ${status.udp_port}）`);
+    // 调校版本、录制状态放前面：手机竖屏状态栏放不下时，后面的会被省略号截掉
+    if (setupInfo.available && setupInfo.setup && setupInfo.setup.name) parts.push(`调校：${setupInfo.setup.name}`);
+    if (status && status.recording) parts.push("● 录制中");
     if (status && status.game_name) parts.push(status.game_name);
     if (status && status.format_label) parts.push(status.format_label);
     if (status && num(status.pps) && mode !== "nodata") parts.push(`${Math.round(status.pps)} 包/秒`);
@@ -468,7 +499,6 @@
       }
     }
     if (status && status.replay) parts.push("回放中");
-    if (status && status.recording) parts.push("录制中");
     setText(E.statusLine, parts.join(" · ") || "等待数据…");
   }
 
@@ -580,13 +610,29 @@
   document.addEventListener("click", () => { if (!wakeLock) requestWakeLock(); }, { once: true });
 
   // ======================= 菜单 / 设置 =======================
+  let recTimer = null;
   function openMenu(open) {
     setHidden(E.menu, !open);
-    if (open) syncSettingsUI();
+    clearInterval(recTimer);
+    recTimer = null;
+    if (open) {
+      hideCard();                    // 菜单里有完整列表，卡片先收起
+      syncSettingsUI();
+      renderSummaryList();
+      loadSummaries();
+      refreshRec();
+      recTimer = setInterval(refreshRec, REC_POLL_MS);
+    } else {
+      showSetupForm(false);
+    }
   }
   function syncSettingsUI() {
     for (const b of document.querySelectorAll("#set-unit button")) b.classList.toggle("on", b.dataset.v === settings.unit);
     for (const b of document.querySelectorAll("#set-hz button")) b.classList.toggle("on", Number(b.dataset.v) === Number(settings.hz));
+    for (const b of document.querySelectorAll("#set-ref button")) b.classList.toggle("on", b.dataset.v === settings.deltaRef);
+    for (const b of document.querySelectorAll("#set-snap button")) b.classList.toggle("on", Number(b.dataset.v) === Number(settings.snapMin));
+    renderShiftInfo();
+    renderSetupInfo();
   }
   function setUnit(u) {
     settings.unit = u === "mph" ? "mph" : "kmh";
@@ -609,6 +655,14 @@
     syncSettingsUI();
     reconnectNow();                  // 推送频率是连接参数，重连生效
   });
+  $("set-ref").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    settings.deltaRef = b.dataset.v === "pb" ? "pb" : "session";
+    saveSettings();
+    syncSettingsUI();
+    dirty = true;
+  });
   // 点车速直接切换单位
   E.speedBox.addEventListener("click", () => {
     setUnit(settings.unit === "mph" ? "kmh" : "mph");
@@ -623,9 +677,322 @@
     toastTimer = setTimeout(() => { E.toast.hidden = true; }, 3500);
   }
 
+  // ======================= 实时差距参照：本场最快 / 历史最快 PB =======================
+  // 服务器两种都算好了：lap.delta / ref_time / predicted 是本场最快，lap.pb 是历史最快（见 forza/live.py）。
+  function pickRef(lap) {
+    const pb = lap.pb && lap.pb.state === "ok" ? lap.pb : null;
+    const sprint = lap.kind === "sprint?";
+    const wantPb = sprint || settings.deltaRef === "pb";   // 冲刺赛没有本场参照，只能比 PB
+    let r = null, label = "", note = "";
+    if (wantPb && pb) {
+      r = pb;
+      label = `PB ${Forza.fmtLap(pb.ref_time)}` + (pb.source === "session" ? "（本场）" : "");
+      if (pb.pi_match === false) note = `PB 是 PI ${pb.car_pi} 跑的`;          // 同一台车、不同改装
+    } else if (wantPb) {
+      const loading = !!lap.pb && lap.pb.state === "loading";
+      const why = lap.pb && lap.pb.reason ? lap.pb.reason : "";     // 例如“第一次过线后才知道是哪条赛道”
+      if (!sprint && num(lap.ref_time)) {                            // 没有 PB：先比本场最快
+        r = lap;
+        label = `本场最快 ${Forza.fmtLap(lap.ref_time)}`;
+        note = loading ? "PB 查询中" : `还没有 PB${why ? "：" + why : ""}`;
+      } else {
+        label = loading ? "PB 查询中…" : "还没有 PB";
+        note = loading ? "" : why;
+      }
+    } else if (num(lap.ref_time)) {
+      r = lap;
+      label = `本场最快 ${Forza.fmtLap(lap.ref_time)}`;
+    }
+    const tentative = !!lap.first_lap && !!r;
+    if (tentative) note = "起步圈，差距只供参考";     // 静止起步：起点和距离零点都和飞驰圈不一样
+    return { delta: r ? r.delta : null, predicted: r ? r.predicted : null, label, note, tentative };
+  }
+
+  // ======================= 换挡灯：实测换挡点（/api/powertrain）=======================
+  let power = null;                // 最近一次 /api/powertrain 的结果（null = 没有，用默认 92% / 97%）
+  function shiftThresholds(f, maxr) {
+    const sp = power && power.shift_rpm ? power.shift_rpm[f.gear] : null;
+    if (num(sp) && sp > 0) return { warn: sp - SHIFT_EARLY_RPM, now: sp, src: "measured" };
+    if (maxr > 0) return { warn: maxr * SHIFT_WARN, now: maxr * SHIFT_NOW, src: "default" };
+    return null;
+  }
+  function renderShiftInfo() {
+    if (power && power.shift_rpm && Object.keys(power.shift_rpm).length) {
+      const gears = Object.keys(power.shift_rpm).sort((a, b) => Number(a) - Number(b));
+      const list = gears.map((g) => `${g}→${Number(g) + 1} ${Math.round(power.shift_rpm[g])}`).join(" · ");
+      const n = num(power.source_laps) ? `，${power.source_laps} 圈数据` : "";
+      setHTML(E.setShift, `<b>实测</b>${esc(n)}<br><span class="muted mono">${esc(list)}</span>`);
+    } else {
+      setHTML(E.setShift, `<b>默认</b> <span class="muted">（最高转速 ${Math.round(SHIFT_WARN * 100)}% 变黄 / ${Math.round(SHIFT_NOW * 100)}% 闪红）</span>`);
+    }
+  }
+
+  // ======================= 车辆相关信息：换挡点 + 当前调校版本 =======================
+  // 车（游戏 / ordinal / PI）变了立刻拉一次，之后每 60 秒拉一次。接口不存在或出错时退回默认、隐藏相关界面。
+  let carKey = "", carInfoTimer = null;
+  const setupInfo = { available: false, setup: null };
+  async function getJSON(path, opts) {
+    try {
+      const r = await fetch(path, opts);
+      let data = null;
+      try { data = await r.json(); } catch (_) { /* 不是 JSON */ }
+      return { ok: r.ok, status: r.status, data };
+    } catch (_) {
+      return { ok: false, status: 0, data: null };
+    }
+  }
+  function watchCar(f) {
+    const c = f.car || {};
+    if (!c.ordinal) return;
+    const key = `${f.game}|${c.ordinal}|${c.pi}`;
+    if (key === carKey) return;
+    carKey = key;
+    power = null;
+    loadCarInfo();
+  }
+  async function loadCarInfo() {
+    clearTimeout(carInfoTimer);
+    carInfoTimer = setTimeout(loadCarInfo, CAR_INFO_REFRESH_MS);
+    if (!carKey) return;
+    const [game, ordinal, pi] = carKey.split("|");
+    const key = carKey;
+    const q = `game=${encodeURIComponent(game)}&car_ordinal=${encodeURIComponent(ordinal)}`;
+    const [pt, su] = await Promise.all([
+      getJSON(`/api/powertrain?${q}&car_pi=${encodeURIComponent(pi)}`),
+      getJSON(`/api/setups/current?${q}`),
+    ]);
+    if (key !== carKey) return;                    // 拉的途中换车了：等下一轮
+    power = pt.ok && pt.data && pt.data.shift_rpm ? pt.data : null;
+    applySetup(su);
+    renderShiftInfo();
+    dirty = true;
+  }
+  function applySetup(res) {
+    setupInfo.available = !!(res && res.ok && res.data && typeof res.data === "object" && "setup" in res.data);
+    setupInfo.setup = setupInfo.available ? res.data.setup : null;
+    renderSetupInfo();
+  }
+  async function reloadSetup() {
+    const [game, ordinal] = carKey ? carKey.split("|") : [];
+    const q = game ? `?game=${encodeURIComponent(game)}&car_ordinal=${encodeURIComponent(ordinal)}` : "";
+    applySetup(await getJSON(`/api/setups/current${q}`));
+  }
+
+  // ======================= 调校版本：菜单里“记录调校改动” =======================
+  function renderSetupInfo() {
+    setHidden(E.secSetup, !setupInfo.available);
+    const s = setupInfo.setup;
+    if (!s) setText(E.setupCur, "当前：还没有记录版本");
+    else {
+      const laps = num(s.lap_count) ? `，${s.lap_count} 圈` : "";
+      setText(E.setupCur, `当前：${s.name}${laps}`);
+    }
+  }
+  function showSetupForm(show) {
+    setHidden(E.setupForm, !show);
+    setText(E.setupMsg, "");
+    if (show) {
+      E.setupName.value = "";
+      E.setupNote.value = "";
+      setTimeout(() => E.setupName.focus(), 0);
+    }
+  }
+  $("btn-setup").addEventListener("click", () => showSetupForm(E.setupForm.hidden));
+  $("setup-cancel").addEventListener("click", () => showSetupForm(false));
+  E.setupForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const name = E.setupName.value.trim();
+    const note = E.setupNote.value.trim();
+    if (!name) { setText(E.setupMsg, "版本名不能为空"); E.setupName.focus(); return; }
+    E.setupSave.disabled = true;
+    setText(E.setupMsg, "保存中…");
+    const r = await getJSON("/api/setups", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(note ? { name, note } : { name }),
+    });
+    E.setupSave.disabled = false;
+    if (!r.ok) {
+      const why = (r.data && r.data.detail) || (r.status ? `出错了（${r.status}）` : "服务未连接");
+      setText(E.setupMsg, typeof why === "string" ? why : "参数不对");
+      return;
+    }
+    showSetupForm(false);
+    toast(`已记录调校版本：${name}。之后存的圈都归到这个版本`);
+    await reloadSetup();
+    dirty = true;
+  });
+
+  // ======================= 录制：开始 / 停止 / 保存刚才 N 分钟 =======================
+  let rec = null;
+  async function refreshRec() {
+    const r = await getJSON("/api/record/status");
+    rec = r.ok ? r.data : null;
+    renderRec();
+  }
+  const fmtInt = (n) => (num(n) ? Math.round(n).toLocaleString("zh-CN") : "--");
+  function renderRec() {
+    if (!rec) {
+      setHTML(E.recState, "录制接口不可用");
+      E.btnRec.disabled = true; E.btnSnap.disabled = true;
+      return;
+    }
+    E.btnRec.disabled = false;
+    setText(E.btnRec, rec.recording ? "■ 停止录制" : "● 开始录制");
+    setCls(E.btnRec, "rec-on", rec.recording);
+    const buf = rec.buffer_minutes > 0
+      ? `内存里有最近 ${(rec.buffer_seconds / 60).toFixed(1)} 分钟（${fmtInt(rec.buffer_packets)} 个包）`
+      : "没开内存缓冲";
+    setHTML(E.recState, rec.recording
+      ? `<b class="bad">● 录制中</b> ${fmtInt(rec.packets)} 个包<br><span class="path mono">${esc(rec.path)}</span>`
+      : `没在录制 · ${esc(buf)}`);
+    const why = rec.snapshot_disabled;
+    E.btnSnap.disabled = !!why || !(rec.buffer_packets > 0);
+    for (const b of document.querySelectorAll("#set-snap button")) {
+      b.disabled = !!why || Number(b.dataset.v) > Math.max(1, rec.buffer_minutes || 0);
+    }
+    if (why) setHTML(E.recResult, esc(`“保存刚才”不可用：${why}`));
+    else if (!E.recResult._own) {
+      const ls = rec.last_snapshot;
+      setHTML(E.recResult, ls ? `上次保存：<span class="path mono">${esc(ls.path)}</span>` : "");
+    }
+  }
+  E.btnRec.addEventListener("click", async () => {
+    E.btnRec.disabled = true;
+    const stop = rec && rec.recording;
+    const r = await getJSON(stop ? "/api/record/stop" : "/api/record/start", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (!r.ok) toast((r.data && r.data.detail) || "录制操作失败");
+    else if (stop && r.data.stopped) {
+      E.recResult._own = true;
+      setHTML(E.recResult, `录像已保存（${fmtInt(r.data.stopped.packets)} 个包）：<span class="path mono">${esc(r.data.stopped.path)}</span>`);
+      toast("录像已保存");
+    } else if (!stop) toast("开始录制");
+    rec = r.ok ? r.data : rec;
+    renderRec();
+    refreshRec();
+  });
+  $("set-snap").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b || b.disabled) return;
+    settings.snapMin = Number(b.dataset.v);
+    saveSettings();
+    syncSettingsUI();
+  });
+  E.btnSnap.addEventListener("click", async () => {
+    E.btnSnap.disabled = true;
+    setHTML(E.recResult, "保存中…");
+    E.recResult._own = true;
+    const r = await getJSON("/api/record/snapshot", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ minutes: Number(settings.snapMin) || 10 }),
+    });
+    if (r.ok) {
+      const d = r.data;
+      setHTML(E.recResult, `已保存 ${fmtInt(d.packets)} 个包、${Math.round(d.seconds)} 秒：<span class="path mono">${esc(d.path)}</span>`);
+      toast("已保存刚才的原始包");
+    } else {
+      setHTML(E.recResult, esc((r.data && r.data.detail) || "保存失败"));
+    }
+    refreshRec();
+  });
+
+  // ======================= 本圈小结：卡片 + 菜单列表 =======================
+  const summaries = [];            // 新的在前
+  let lastSummaryId = null, cardTimer = null, cardId = null;
+  function addSummary(s) {
+    const i = summaries.findIndex((x) => x.id === s.id);
+    if (i >= 0) summaries[i] = s; else summaries.push(s);
+    summaries.sort((a, b) => b.id - a.id);
+    summaries.length = Math.min(summaries.length, SUMMARY_KEEP);
+  }
+  function onSummary(s, serverT) {
+    if (!s || s.id === lastSummaryId) return;
+    lastSummaryId = s.id;
+    addSummary(s);
+    if (!E.menu.hidden) renderSummaryList();
+    if (s.id === settings.seenSummary) return;     // 这台设备已经弹过了（刷新页面不再弹）
+    settings.seenSummary = s.id;
+    saveSettings();
+    const age = num(serverT) && num(s.t) ? serverT - s.t : 0;
+    if (age <= SUMMARY_MAX_AGE_S) showCard(s);
+  }
+  function lapTitle(s) {
+    const n = s.kind === "sprint" ? "冲刺赛" : `第 ${num(s.lap_number) ? s.lap_number + 1 : "-"} 圈`;
+    return `${n} ${Forza.fmtLap(s.lap_time)}`;
+  }
+  function summaryNote(s) {
+    const parts = [];
+    if (s.ref) parts.push(`参考：${s.ref.lap_number === null || s.ref.lap_number === undefined ? "" : `第 ${s.ref.lap_number + 1} 圈 `}${Forza.fmtLap(s.ref.lap_time)}`);
+    if (s.setup_name) parts.push(`调校：${s.setup_name}`);
+    if (s.note) parts.push(s.note);
+    return parts.join(" · ");
+  }
+  function showCard(s) {
+    cardId = s.id;
+    setText(E.scTitle, lapTitle(s) + (s.first_lap ? "（起步圈）" : ""));
+    const d = s.lap_time_delta_s;
+    setText(E.scDelta, num(d) ? Forza.fmtDelta(d, 3) : "");
+    setCls(E.scDelta, "good", num(d) && d < 0);
+    setCls(E.scDelta, "bad", num(d) && d > 0);
+    setText(E.scSum, s.summary || "");
+    E.scTop.innerHTML = (s.top || []).map((t) => `<li>${esc(t.explanation)}</li>`).join("");
+    setText(E.scNote, summaryNote(s));
+    setCls(E.sumCard, "first", !!s.first_lap);
+    E.sumCard.hidden = false;
+    E.scTimer.style.animation = "none";
+    void E.scTimer.offsetWidth;                    // 重新开始倒计时动画
+    E.scTimer.style.animation = "";
+    clearTimeout(cardTimer);
+    cardTimer = setTimeout(hideCard, SUMMARY_SHOW_MS);
+  }
+  function hideCard() {
+    clearTimeout(cardTimer);
+    E.sumCard.hidden = true;
+    cardId = null;
+  }
+  E.sumCard.addEventListener("click", hideCard);
+  async function loadSummaries() {
+    const r = await getJSON("/api/live/summaries");
+    if (!r.ok || !r.data || !Array.isArray(r.data.items)) return;
+    for (const s of r.data.items) addSummary(s);
+    renderSummaryList();
+  }
+  function renderSummaryList() {
+    if (!summaries.length) {
+      setHTML(E.sumList, `<p class="muted small">跑完一圈、存好之后（过线十来秒）会弹出小结，也会列在这里。</p>`);
+      return;
+    }
+    const open = new Set([...E.sumList.querySelectorAll(".sum-item.open")].map((x) => Number(x.dataset.id)));
+    E.sumList._h = null;
+    E.sumList.innerHTML = summaries.map((s) => {
+      const d = s.lap_time_delta_s;
+      const dc = num(d) ? (d < 0 ? "good" : d > 0 ? "bad" : "") : "";
+      const top = (s.top || []).map((t) => `<li>${esc(t.explanation)}</li>`).join("");
+      const note = summaryNote(s);
+      return `<div class="sum-item${open.has(s.id) ? " open" : ""}" data-id="${s.id}">` +
+        `<div class="si-head"><b>${esc(lapTitle(s))}</b>` +
+        (s.first_lap ? `<span class="tag">起步圈</span>` : "") +
+        `<span class="mono ${dc}">${num(d) ? esc(Forza.fmtDelta(d, 2)) : ""}</span></div>` +
+        `<div class="si-sum">${esc(s.summary || "")}</div>` +
+        `<div class="si-more">${top ? `<ul>${top}</ul>` : ""}${note ? `<p class="muted">${esc(note)}</p>` : ""}` +
+        `<a href="/laps.html?b=${encodeURIComponent(s.id)}">在对比页查看 →</a></div></div>`;
+    }).join("");
+  }
+  E.sumList.addEventListener("click", (ev) => {
+    if (ev.target.closest("a")) return;
+    const it = ev.target.closest(".sum-item");
+    if (it) it.classList.toggle("open");
+  });
+
+  // “车辆调校”页面是另一个模块做的：存在才显示链接
+  getJSON("/car.html", { method: "HEAD" }).then((r) => { if (r.ok) $("link-car").hidden = false; });
+
   // ======================= 启动 =======================
   setText(E.speedUnit, settings.unit === "mph" ? "mph" : "km/h");
   requestWakeLock();
+  renderShiftInfo();
+  reloadSetup();                   // 还没收到车的时候也先看看接口在不在（参数省略 = 实时那台车）
   connect();
   requestAnimationFrame(loop);
 })();

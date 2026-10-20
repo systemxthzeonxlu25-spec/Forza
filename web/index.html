@@ -52,6 +52,7 @@
         <div class="lbl">实时差距 <span class="muted" id="delta-ref"></span></div>
         <div class="delta mono" id="delta">--</div>
         <div class="delta-bar"><i id="delta-fill"></i><b></b></div>
+        <div class="delta-note" id="delta-note" hidden></div>
       </div>
       <div class="lap-rows">
         <div class="row big"><span class="lbl">本圈</span><span class="mono" id="lap-cur">--:--.---</span></div>
@@ -82,6 +83,15 @@
       <span class="status-line" id="status-line">正在连接…</span>
     </footer>
 
+    <!-- 本圈小结卡片：新圈存好后弹出 10 秒，点一下收起；菜单里能翻看最近几条 -->
+    <div class="sumcard" id="sumcard" hidden role="status" aria-live="polite" title="点一下收起">
+      <div class="sc-head"><b id="sc-title"></b><span class="sc-delta mono" id="sc-delta"></span><span class="sc-x" aria-hidden="true">×</span></div>
+      <p class="sc-sum" id="sc-sum"></p>
+      <ul class="sc-top" id="sc-top"></ul>
+      <p class="sc-note" id="sc-note"></p>
+      <i class="sc-timer" id="sc-timer"></i>
+    </div>
+
     <!-- 暂停 / 数据中断：盖在面板中间的大字提示 -->
     <div class="center-msg" id="center-msg" hidden></div>
 
@@ -105,7 +115,7 @@
     </div>
   </main>
 
-  <!-- 菜单：页面导航 + 本机设置 -->
+  <!-- 菜单：页面导航 + 本圈小结 + 实时差距参照 + 调校版本 + 录制 + 本机设置 -->
   <div class="menu" id="menu" hidden>
     <div class="menu-card">
       <div class="menu-head"><b>菜单</b><button id="menu-close" aria-label="关闭">关闭</button></div>
@@ -113,15 +123,58 @@
         <a href="/">实时面板</a>
         <a href="/laps.html">圈速对比</a>
         <a href="/tuning.html">调车诊断</a>
+        <a href="/car.html" id="link-car" hidden>车辆调校</a>
         <a href="/connect.html">连接手机</a>
       </nav>
-      <div class="menu-set">
-        <div class="set-row"><span>车速单位</span>
-          <span class="seg" id="set-unit"><button data-v="kmh">km/h</button><button data-v="mph">mph</button></span></div>
-        <div class="set-row"><span>刷新频率</span>
-          <span class="seg" id="set-hz"><button data-v="10">10</button><button data-v="20">20</button><button data-v="30">30</button></span></div>
-        <div class="set-row"><span>防息屏</span><span class="muted" id="set-wake">--</span></div>
-        <p class="muted small">这些设置只保存在这台设备上。刷新频率低一点更省电。</p>
+      <div class="menu-cols">
+        <section class="menu-sec">
+          <h3>实时差距对比</h3>
+          <div class="set-row"><span class="seg" id="set-ref"><button data-v="session">本场最快</button><button data-v="pb">历史最快 PB</button></span></div>
+          <p class="muted small" id="ref-hint">PB = 数据库里这台车在这条赛道上最快的完整圈。冲刺赛总是对比 PB。</p>
+        </section>
+
+        <section class="menu-sec sec-sum">
+          <h3>本圈小结</h3>
+          <div class="sum-list" id="sum-list"><p class="muted small">跑完一圈、存好之后（过线十来秒）会弹出小结，也会列在这里。</p></div>
+        </section>
+
+        <section class="menu-sec" id="sec-setup" hidden>
+          <h3>调校版本</h3>
+          <div class="set-row"><span class="setup-cur" id="setup-cur">当前：--</span><button id="btn-setup">记录调校改动</button></div>
+          <form class="setup-form" id="setup-form" hidden autocomplete="off">
+            <input id="setup-name" maxlength="60" placeholder="版本名，例如：后防倾杆 −2" required>
+            <input id="setup-note" maxlength="200" placeholder="一行说明：改了什么（可不填）">
+            <div class="form-btns"><button type="submit" class="primary" id="setup-save">保存</button><button type="button" id="setup-cancel">取消</button></div>
+            <p class="small form-msg" id="setup-msg"></p>
+          </form>
+          <p class="muted small">Data Out 里没有调校数值，只能手填。之后存的圈会自动归到这个版本。</p>
+        </section>
+
+        <section class="menu-sec">
+          <h3>录制原始包</h3>
+          <p class="small rec-state" id="rec-state">--</p>
+          <div class="rec-row">
+            <button id="btn-rec">开始录制</button>
+          </div>
+          <div class="rec-row">
+            <span>保存刚才</span>
+            <span class="seg" id="set-snap"><button data-v="1">1</button><button data-v="3">3</button><button data-v="5">5</button><button data-v="10">10</button></span>
+            <span>分钟</span>
+            <button id="btn-snap">保存</button>
+          </div>
+          <p class="small rec-result" id="rec-result"></p>
+        </section>
+
+        <section class="menu-sec">
+          <h3>显示</h3>
+          <div class="set-row"><span>车速单位</span>
+            <span class="seg" id="set-unit"><button data-v="kmh">km/h</button><button data-v="mph">mph</button></span></div>
+          <div class="set-row"><span>刷新频率</span>
+            <span class="seg" id="set-hz"><button data-v="10">10</button><button data-v="20">20</button><button data-v="30">30</button></span></div>
+          <div class="set-row"><span>换挡点</span><span class="small shift-src" id="set-shift">默认</span></div>
+          <div class="set-row"><span>防息屏</span><span class="muted" id="set-wake">--</span></div>
+          <p class="muted small">这些设置只保存在这台设备上。刷新频率低一点更省电。</p>
+        </section>
       </div>
     </div>
   </div>

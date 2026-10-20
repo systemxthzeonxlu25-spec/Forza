@@ -9,7 +9,8 @@
   <link rel="stylesheet" href="/laps.css">
 </head>
 <body>
-<!-- 圈速列表 + 两圈对比。逻辑全在 laps.js，样式在 laps.css；数据来自 /api/laps、/api/compare -->
+<!-- 圈速列表 + 分段 / 理论最佳 + 两圈对比。逻辑全在 laps.js，样式在 laps.css；
+     数据来自 /api/laps、/api/sectors、/api/compare（调校版本名来自 /api/setups，没有时只用圈里记的名字） -->
 <main class="page laps-page">
 
   <!-- 整页加载失败 / 还没有任何圈 -->
@@ -24,6 +25,10 @@
     <div class="filter-group" id="car-group">
       <span class="flabel">车辆</span>
       <span class="fctl" id="car-ctl"></span>
+    </div>
+    <div class="filter-group" id="setup-group" hidden>
+      <span class="flabel">调校</span>
+      <span class="fctl" id="setup-ctl"></span>
     </div>
     <label class="chk"><input type="checkbox" id="complete-only"> 只看完整圈</label>
     <span class="grow"></span>
@@ -56,6 +61,21 @@
     </div>
   </section>
 
+  <!-- 分段 / 理论最佳（每条赛道一张固定弯道表） -->
+  <section class="card sec-card" id="sectors-card" hidden>
+    <div class="card-head">
+      <h2>分段 / 理论最佳</h2>
+      <span class="muted small" id="sec-sub"></span>
+      <span class="grow"></span>
+      <span class="seg-sort sec-view" role="group" aria-label="显示方式">
+        <button class="small-btn on" data-view="table">各段</button>
+        <button class="small-btn" data-view="matrix">逐圈</button>
+      </span>
+      <button class="small-btn" id="sec-rebuild" title="用这条赛道最快的干净圈重新识别弯道（改过的弯名按位置沿用）">重算弯道表</button>
+    </div>
+    <div id="sec-body"></div>
+  </section>
+
   <!-- 对比结果 -->
   <section id="compare" hidden>
     <div class="card cmp-head" id="cmp-head"></div>
@@ -67,6 +87,10 @@
           <span class="grow"></span>
           <span class="muted small" id="zoom-label">全圈</span>
           <button class="small-btn" id="zoom-reset" hidden>看全圈</button>
+          <span class="picker-wrap">
+            <button class="small-btn" id="extra-btn" aria-expanded="false" title="选择要多看的曲线">更多曲线 ▾</button>
+            <div class="extra-picker card" id="extra-picker" hidden></div>
+          </span>
         </div>
         <div class="readout mono" id="readout"></div>
         <div id="charts"></div>
@@ -74,10 +98,18 @@
       </div>
       <aside class="cmp-side">
         <div class="card map-card">
-          <div class="card-head"><h3>赛道图</h3><span class="muted small">颜色 = B 在这里丢 / 赚时间</span></div>
+          <div class="card-head"><h3>赛道图</h3><span class="muted small" id="map-sub">颜色 = B 在这里丢 / 赚时间</span></div>
           <div class="map-wrap"><canvas id="map"></canvas></div>
-          <div class="map-legend small">
+          <div class="map-legend small" id="map-legend-full">
             <span>B 赚时间</span><span class="ramp"></span><span>B 丢时间</span>
+          </div>
+          <div class="map-legend zoom small" id="map-legend-zoom" hidden>
+            <span class="lk"><span class="sw" style="background:var(--accent)"></span>A</span>
+            <span class="lk"><span class="sw" style="background:var(--accent-2)"></span>B</span>
+            <span class="lk"><svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="4.5"/></svg>刹车点</span>
+            <span class="lk"><svg viewBox="0 0 12 12"><path d="M6 1.5 10.5 10H1.5z"/></svg>转向点</span>
+            <span class="lk"><svg viewBox="0 0 12 12"><path d="M6 1 11 6 6 11 1 6z"/></svg>弯心</span>
+            <span class="lk"><svg viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8"/></svg>全油门</span>
           </div>
         </div>
         <div class="card seg-card">
@@ -90,11 +122,14 @@
             </span>
           </div>
           <div class="seg-list" id="seg-list"></div>
+          <div class="muted small seg-note">刹车 % 只是踏板踩了多深（Data Out 没有 ABS 状态，实际制动看减速 G）；
+            手柄的方向输入可能被游戏做过死区 / 平滑处理，“修方向”次数仅供参考。</div>
         </div>
       </aside>
     </div>
   </section>
 </main>
+<div class="toast" id="toast" role="status" hidden></div>
 
 <script src="/vendor/uPlot.iife.min.js"></script>
 <script src="/common.js"></script>

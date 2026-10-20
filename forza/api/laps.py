@@ -7,19 +7,27 @@
     GET    /api/tracks               PATCH /api/tracks/{id}            {"name": "..."}
     GET    /api/cars                 PATCH /api/cars/{game}/{ordinal}  {"name": "..."}
     GET    /api/sessions
+    GET    /api/laps/{id}/reference          这圈的默认参考圈（同赛道同车最快完整圈，排除自己）：{"reference": 圈|null}
     GET    /api/compare?a=ID&b=ID&step=2     a = 参考圈，b = 对比圈
     GET    /api/compare?a=ID                 不给 b：拿 a 和同赛道同车的最快完整圈比（a 本身最快就和第二快比）
+    GET    /api/compare?...&channels=g_lat,tire_temp   额外要哪些曲线（见 analysis.EXTRA_CHANNELS），按需返回
 
+赛道有固定弯道表（forza/sectors.py）时，逐弯分析用那张表（两圈、诊断页的 T5 是同一个弯）；
+还没有表的赛道第一次对比时会用最快的干净圈自动生成一张。
 比较逻辑全在 forza/analysis.py，这里只管取数据、校验参数、出错时给中文提示。
 """
 from __future__ import annotations
 
+import logging
 import math
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..analysis import compare as compare_laps, jsonable
+from ..analysis import EXTRA_CHANNELS, jsonable
+from ..analysis import compare as compare_laps
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
@@ -110,6 +118,15 @@ def get_lap(request: Request, lap_id: int, step: int = 1, channels: str | None =
     return out
 
 
+@router.get("/laps/{lap_id}/reference")
+def lap_reference(request: Request, lap_id: int):
+    """深链 /laps.html?b=ID 没给 a 时，前端用它选参考圈（和 /api/compare 只给一个圈时选的一样）。"""
+    store = _store(request)
+    meta = _lap_meta_or_404(store, lap_id)
+    ref = default_reference(store, meta)
+    return {"lap_id": lap_id, "reference": jsonable(_add_best_info(store, [ref])[0]) if ref else None}
+
+
 @router.patch("/laps/{lap_id}")
 def patch_lap(request: Request, lap_id: int, body: LapPatch):
     store = _store(request)
@@ -180,11 +197,34 @@ def default_reference(store, lap_meta: dict) -> dict | None:
     return laps[0] if laps else None
 
 
+def _fixed_corners(store, ref):
+    """赛道的固定弯道表映射到参考圈上；没有表（也生成不了）或出错时返回 None（退回参考圈自己识别）。"""
+    try:
+        from ..sectors import ensure_layout, layout_corners
+        ensure_layout(store, ref.meta.get("track_id"))
+        return layout_corners(store, ref)
+    except Exception:
+        log.exception("读取固定弯道表失败，改用参考圈自动识别弯道")
+        return None
+
+
+def _parse_channels(channels: str | None) -> list[str]:
+    keys = [c.strip() for c in (channels or "").replace("，", ",").split(",") if c.strip()]
+    bad = [k for k in keys if k not in EXTRA_CHANNELS]
+    if bad:
+        opts = "、".join(f"{k}（{v[0]}）" for k, v in EXTRA_CHANNELS.items())
+        raise HTTPException(400, f"不认识的曲线：{', '.join(bad)}。可选：{opts}")
+    return keys
+
+
 @router.get("/compare")
-def compare(request: Request, a: str | None = None, b: str | None = None, step: float = 2.0):
-    """a = 参考圈，b = 对比圈。不给 b：a 当对比圈，参考圈自动选同赛道同车最快的完整圈。"""
+def compare(request: Request, a: str | None = None, b: str | None = None, step: float = 2.0,
+            channels: str | None = None):
+    """a = 参考圈，b = 对比圈。不给 b：a 当对比圈，参考圈自动选同赛道同车最快的完整圈。
+    channels = 逗号分隔的额外曲线（g_lat, g_comb, slip_angle, slip_ratio, tire_temp, susp）。"""
     if not math.isfinite(step) or not STEP_RANGE[0] <= step <= STEP_RANGE[1]:
         raise HTTPException(400, f"step 要在 {STEP_RANGE[0]}~{STEP_RANGE[1]} 米之间")
+    extra = _parse_channels(channels)
     store = _store(request)
     a_id = _parse_id(a, "a")
     a_meta = _lap_meta_or_404(store, a_id)
@@ -204,7 +244,7 @@ def compare(request: Request, a: str | None = None, b: str | None = None, step: 
 
     ref, other = store.get_lap(ref_id), store.get_lap(other_id)
     try:
-        res = compare_laps(ref, other, step=step)
+        res = compare_laps(ref, other, step=step, corners=_fixed_corners(store, ref), extra=extra)
     except ValueError as e:
         raise HTTPException(400, f"没法对比：{e}") from None
     res["auto_reference"] = auto

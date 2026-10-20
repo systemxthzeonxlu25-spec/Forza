@@ -26,6 +26,9 @@ class Config:
     tire_temp_unit: str = "F"    # 游戏发来的胎温单位，社区共识是 °F
     live_hz: float = 20.0        # 实时面板推送频率（手机上 20Hz 足够流畅）
     forward: list[str] | None = None  # 原样转发原始包到其他程序，如 ["127.0.0.1:20777"]
+    # 内存里常驻保留最近几分钟的原始包，实时面板菜单里可以“保存刚才 N 分钟”（0 = 关闭）。
+    # 每分钟大约占 1.2 MB（FM 60 包/秒）~ 2.8 MB（FH 高帧率约 140 包/秒）
+    record_buffer_minutes: float = 10.0
 
     def resolve(self, p: str) -> Path:
         path = Path(p)

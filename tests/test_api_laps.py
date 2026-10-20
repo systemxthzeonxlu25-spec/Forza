@@ -184,3 +184,71 @@ def test_laps_page_served(client):
     assert r.status_code == 200 and "laps.js" in r.text
     assert client.get("/laps.js").status_code == 200
     assert client.get("/laps.css").status_code == 200
+
+
+def test_compare_channels_param(client):
+    ids = _ids(client)
+    j = client.get(f"/api/compare?a={ids[3]}&b={ids[2]}&channels=g_lat,tire_temp,slip_angle").json()
+    assert set(j["extra"]) == {"g_lat", "tire_temp", "slip_angle"}
+    n = len(j["channels"]["dist"])
+    for side in ("ref", "other"):
+        ch = j["channels"][side]
+        for k in ("g_lat", "tire_temp_fl", "tire_temp_rr", "slip_angle_front", "slip_angle_rear"):
+            assert len(ch[k]) == n
+        assert "susp_fl" not in ch and "g_comb" not in ch          # 没勾选的不返回
+    assert j["extra"]["tire_temp"]["unit"] == "°C"
+    # 默认不带额外曲线，返回体积小
+    base = client.get(f"/api/compare?a={ids[3]}&b={ids[2]}").json()
+    assert base["extra"] == {} and set(base["channels"]["ref"]) == {"speed", "throttle", "brake", "steer", "gear", "rpm", "t"}
+    assert len(str(base)) < len(str(j))
+    # 不认识的通道：400，列出可选项
+    r = client.get(f"/api/compare?a={ids[3]}&b={ids[2]}&channels=g_lat,abc")
+    assert r.status_code == 400 and "abc" in r.json()["detail"] and "tire_temp" in r.json()["detail"]
+    assert client.get(f"/api/compare?a={ids[3]}&b={ids[2]}&channels=").status_code == 200
+
+
+def test_compare_two_paths_and_offset(client):
+    ids = _ids(client)
+    j = client.get(f"/api/compare?a={ids[3]}&b={ids[2]}").json()
+    assert len(j["map"]["x_b"]) == len(j["map"]["x"])
+    off = j["channels"]["lateral_offset"]
+    assert len(off) == len(j["channels"]["dist"]) and max(abs(v) for v in off if v is not None) < 1.0
+    t3 = next(s for s in j["segments"] if s["name"] == "T3")
+    for k in ("brake_ref_m", "brake_other_m", "turn_in_ref_m", "turn_in_other_m", "min_speed_ref_m",
+              "min_speed_other_m", "full_throttle_ref_m", "full_throttle_other_m"):
+        assert t3[k] is not None, k
+    assert j["corner_source"] == "layout"      # 第一次对比时用最快的干净圈生成了固定弯道表
+
+
+def test_lap_reference_for_deep_link(client):
+    """/laps.html?b=ID 不给 a：参考圈和 /api/compare 只给一个圈时选的一样。"""
+    ids = _ids(client)
+    for n in (2, 3, 0):
+        ref = client.get(f"/api/laps/{ids[n]}/reference").json()["reference"]
+        auto = client.get(f"/api/compare?a={ids[n]}").json()
+        assert ref["id"] == auto["ref"]["id"]
+    assert client.get(f"/api/laps/{ids[2]}/reference").json()["reference"]["id"] == ids[3]
+    assert client.get(f"/api/laps/{ids[3]}/reference").json()["reference"]["id"] == ids[1]
+    assert client.get("/api/laps/9999/reference").status_code == 404
+    for n in (0, 1, 2, 4):
+        client.patch(f"/api/laps/{ids[n]}", json={"is_complete": False})
+    assert client.get(f"/api/laps/{ids[3]}/reference").json()["reference"] is None
+    # 深链里的 at 换到对比网格要乘的比例
+    j = client.get(f"/api/compare?a={ids[3]}&b={ids[2]}").json()
+    assert j["scale"] == pytest.approx(j["length_m"] / j["other_length_m"], rel=1e-4)
+
+
+def test_setup_meta_passthrough(client):
+    """调校版本（setup_id / setup_name 存在 laps.meta 里）原样出现在圈列表里，前端按它筛选。"""
+    ids = _ids(client)
+    client.rt.store.execute(
+        "UPDATE laps SET meta = json_set(meta, '$.setup_id', 3, '$.setup_name', '后翼 +2') WHERE id=?", (ids[2],))
+    laps = {l["lap_number"]: l for l in client.get("/api/laps").json()}
+    assert laps[2]["setup_id"] == 3 and laps[2]["setup_name"] == "后翼 +2"
+    assert laps[1].get("setup_id") is None
+
+
+def test_laps_page_has_new_sections(client):
+    html = client.get("/laps.html").text
+    for el in ('id="sectors-card"', 'id="setup-ctl"', 'id="extra-picker"'):
+        assert el in html, el

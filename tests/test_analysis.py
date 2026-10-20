@@ -2,13 +2,14 @@
 import json
 import math
 
+import numpy as np
 import pytest
 
-from forza.analysis import (BRAKE_POINT_MIN_M, MIN_SPEED_MIN_KMH, compare)
+from forza.analysis import BRAKE_POINT_MIN_M, MIN_SPEED_MIN_KMH, compare
 from forza.fake import write_fake_recording
 from forza.hub import Hub
-from forza.laps import LapDetector, LapSaver
 from forza.lapdata import LapData
+from forza.laps import LapDetector, LapSaver
 from forza.replay import import_file
 from forza.storage import Store
 
@@ -149,3 +150,189 @@ def test_bad_input():
     tiny = LapData(meta={}, ch={"t": [0.0, 0.1], "dist": [0.0, 1.0]})
     with pytest.raises(ValueError):
         compare(tiny, tiny)
+
+
+# ---------------------------------------------------------------- 驾驶细节：滑行 / 松刹 / 带刹车入弯 / 收油 / 修方向 / 反打
+
+NEW_WORDS = ("滑行", "松刹车", "带刹车", "修了", "反打", "收油", "收了")
+
+
+def _modified(lap: LapData, fn) -> LapData:
+    """复制一圈，按 fn(ch) 改通道（只改输入，时间不变 → 各段时间差 ≈ 0，只看解释句）。"""
+    ch = {k: v.copy() for k, v in lap.ch.items()}
+    fn(ch)
+    return LapData(meta={**lap.meta, "id": 900}, ch=ch)
+
+
+def _win(ch, lo, hi):
+    return (ch["dist"] >= lo) & (ch["dist"] <= hi)
+
+
+def test_new_metrics_quiet_on_normal_laps(demo):
+    """正常圈之间（同一个司机模型、只有随机波动）不能冒出滑行、松刹、修方向这些句子。"""
+    _, laps = demo
+    for ref_n, oth_n in [(3, 1), (3, 4), (1, 4), (4, 1), (1, 3), (4, 3)]:
+        res = compare(laps[ref_n], laps[oth_n])
+        for s in res["segments"]:
+            for c in s["clauses"]:
+                assert not any(w in c for w in NEW_WORDS), (ref_n, oth_n, s["name"], c)
+            if s["kind"] == "corner":
+                for k in ("coast_pre", "coast_mid", "coast_exit"):
+                    assert abs(s[f"{k}_ref_s"] - s[f"{k}_other_s"]) < 0.2
+                assert abs(s["trail_ref_m"] - s["trail_other_m"]) < 10
+
+
+def test_slow_corner_mentions_coasting(demo):
+    """第 2 圈 T3：刹得早、刹得轻，松开刹车后两脚都不踩、一路滑到弯心（假数据就是这么开的）。"""
+    _, laps = demo
+    t3 = _seg(compare(laps[3], laps[2]), "T3")
+    assert t3["coast_mid_other_s"] > 1.0 and t3["coast_mid_ref_s"] < 0.2
+    assert "松开刹车到弯心之间滑行" in t3["explanation"]
+    assert "最大减速" in t3["explanation"]          # 踏板轻了，实际减速 G 也小了
+    assert t3["decel_other_g"] < t3["decel_ref_g"]
+
+
+def test_synthetic_driving_faults(demo):
+    """在最快圈上人为制造各种毛病，解释句要逐条说出来。"""
+    _, laps = demo
+    ref = laps[3]
+    base = compare(ref, ref)
+    seg0 = {s["name"]: s for s in base["segments"]}
+    b4 = seg0["T4"]["brake_ref_m"]
+    t6_apex = seg0["T6"]["apex_m"]
+    t10_apex = seg0["T10"]["apex_m"]
+    t8 = seg0["T8"]
+
+    def faults(ch):
+        d = ch["dist"]
+        # T4：刹车点前 35 m 松油滑行
+        m = _win(ch, b4 - 35, b4 - 1)
+        ch["throttle"][m] = 0.0
+        # T1：转向以后立刻松掉刹车（不带刹车入弯）
+        m = _win(ch, 600, 700) & (np.abs(ch["steer"]) >= 0.08)
+        ch["brake"][m] = 0.0
+        # T6：出弯两次收油
+        m = _win(ch, t6_apex + 5, t6_apex + 95)
+        x = (d[m] - (t6_apex + 5)) / 90.0
+        ch["throttle"][m] = np.interp(x, [0, .15, .3, .45, .6, .75, 1], [.6, .6, .25, .8, .8, .35, 1.0])
+        # T8：弯里方向来回修
+        m = _win(ch, t8["start_m"], t8["end_m"])
+        ch["steer"][m] += 0.12 * np.sin((d[m] - t8["start_m"]) / 8.0 * 2 * np.pi)
+        # T10：弯心之后反打方向
+        m = _win(ch, t10_apex + 10, t10_apex + 24)
+        ch["steer"][m] = -0.15
+
+    res = compare(ref, _modified(ref, faults))
+    seg = {s["name"]: s for s in res["segments"]}
+    txt = {k: "，".join(s["clauses"]) for k, s in seg.items()}
+    assert "入弯前（刹车前）滑行" in txt["T4"], txt["T4"]
+    assert seg["T4"]["coast_pre_other_s"] == pytest.approx(0.6, abs=0.2)
+    assert "没带刹车入弯" in txt["T1"], txt["T1"]
+    assert "松刹车太急" in txt["T1"], txt["T1"]
+    assert "出弯收了 2 次油" in txt["T6"], txt["T6"]
+    assert "方向来回修了" in txt["T8"], txt["T8"]
+    assert seg["T8"]["steer_corrections_other"] - seg["T8"]["steer_corrections_ref"] >= 2
+    assert "反打方向 1 次" in txt["T10"], txt["T10"]
+    # 没动过的弯不受影响
+    for name in ("T2", "T3", "T5", "T7", "T9"):
+        assert not any(w in txt[name] for w in NEW_WORDS), (name, txt[name])
+    # 反过来比：这些毛病变成参考圈的
+    rev = {s["name"]: "，".join(s["clauses"]) for s in compare(_modified(ref, faults), ref)["segments"]}
+    assert "出弯收油更少" in rev["T6"] and "反打更少" in rev["T10"]
+
+
+def test_clutch_in_is_not_coasting(demo):
+    """踩着离合（换挡 / 空挡）不算滑行：离合通道要参与重采样。"""
+    _, laps = demo
+    ref = laps[3]
+    b4 = _seg(compare(ref, ref), "T4")["brake_ref_m"]
+
+    def coast(ch):
+        ch["throttle"][_win(ch, b4 - 35, b4 - 1)] = 0.0
+
+    def coast_clutch(ch):
+        coast(ch)
+        ch["clutch"][_win(ch, b4 - 36, b4)] = 1.0
+
+    assert _seg(compare(ref, _modified(ref, coast)), "T4")["coast_pre_other_s"] > 0.4
+    assert _seg(compare(ref, _modified(ref, coast_clutch)), "T4")["coast_pre_other_s"] == 0.0
+
+
+# ---------------------------------------------------------------- 两圈走线 / 横向偏移 / 可选曲线 / 固定弯道表
+
+def _shift_right(lap: LapData, meters: float) -> LapData:
+    """把整圈走线往行驶方向右侧平移 meters 米（负数 = 左）。"""
+    def fn(ch):
+        x, z = ch["pos_x"], ch["pos_z"]
+        hx, hz = np.gradient(x), np.gradient(z)
+        n = np.hypot(hx, hz)
+        n[n == 0] = 1.0
+        ch["pos_x"] = x + meters * hz / n
+        ch["pos_z"] = z - meters * hx / n
+    return _modified(lap, fn)
+
+
+def test_lateral_offset_sign_and_size(demo):
+    _, laps = demo
+    ref = laps[3]
+    for m in (3.0, -2.0):
+        res = compare(ref, _shift_right(ref, m))
+        off = np.array([v for v in res["channels"]["lateral_offset"] if v is not None])
+        assert len(off) > 0.95 * len(res["channels"]["dist"])
+        assert np.median(off) == pytest.approx(m, abs=0.2)
+        assert np.percentile(np.abs(off - m), 95) < 0.6
+    # 同一条走线：偏移 ≈ 0
+    off = compare(laps[3], laps[1])["channels"]["lateral_offset"]
+    assert max(abs(v) for v in off if v is not None) < 1.0
+
+
+def test_map_has_both_paths_and_markers(demo):
+    _, laps = demo
+    res = compare(laps[3], laps[2])
+    m = res["map"]
+    assert len(m["x_b"]) == len(m["z_b"]) == len(m["x"]) > 100
+    assert all(c["label"] for c in m["corners"])
+    t1 = _seg(res, "T1")
+    # 转向点：第一次 |方向| ≥ 10%，在刹车点之后、弯心之前
+    for side in ("ref", "other"):
+        assert t1[f"brake_{side}_m"] < t1[f"turn_in_{side}_m"] < t1["apex_m"]
+        assert t1[f"min_speed_{side}_m"] is not None and t1[f"full_throttle_{side}_m"] > t1["apex_m"] - 30
+    assert res["corner_source"] == "detected"
+
+
+def test_extra_channels(demo):
+    _, laps = demo
+    res = compare(laps[3], laps[2], extra=["g_lat", "g_comb", "slip_angle", "slip_ratio", "tire_temp", "susp"])
+    n = len(res["channels"]["dist"])
+    names = {s["name"] for v in res["extra"].values() for s in v["series"]}
+    assert names == {"g_lat", "g_comb", "slip_angle_front", "slip_angle_rear", "slip_ratio_drive",
+                     "tire_temp_fl", "tire_temp_fr", "tire_temp_rl", "tire_temp_rr",
+                     "susp_fl", "susp_fr", "susp_rl", "susp_rr"}
+    for side in ("ref", "other"):
+        ch = res["channels"][side]
+        assert all(len(ch[k]) == n for k in names)
+        assert 50 < np.median(ch["tire_temp_fl"]) < 130           # °C
+        assert max(ch["g_comb"]) >= max(abs(v) for v in ch["g_lat"]) - 1e-6
+        assert all(0 <= v <= 1 for v in ch["susp_fl"])
+    # 后驱车：驱动轮 = 后轮，出弯（T5 后面）有明显正滑移
+    assert max(res["channels"]["other"]["slip_ratio_drive"]) > 1.0
+    json.dumps(res, allow_nan=False)
+    assert {o["key"] for o in res["extra_options"]} == {"g_lat", "g_comb", "slip_angle", "slip_ratio", "tire_temp", "susp"}
+    with pytest.raises(ValueError):
+        compare(laps[3], laps[2], extra=["nope"])
+    assert compare(laps[3], laps[2])["extra"] == {}
+
+
+def test_fixed_corners_with_labels(demo):
+    """传入固定弯道表：段名用编号（T5），解释句和总结用显示名。"""
+    from forza.corners import detect_corners
+    _, laps = demo
+    cs = detect_corners(laps[3])
+    for c in cs:
+        c["label"] = "发卡弯" if c["name"] == "T3" else c["name"]
+    res = compare(laps[3], laps[2], corners=cs)
+    assert res["corner_source"] == "layout"
+    assert res["ranking"][0]["name"] == "T3"
+    assert res["ranking"][0]["explanation"].startswith("发卡弯：慢 ")
+    assert "发卡弯" in res["totals"]["summary"]
+    assert next(c for c in res["map"]["corners"] if c["name"] == "T3")["label"] == "发卡弯"

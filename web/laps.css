@@ -96,10 +96,47 @@ button.link.danger { color: var(--bad); }
 .badge.incomplete { color: var(--bad); border-color: rgba(255, 92, 92, 0.45); }
 .badge.rewind { color: var(--warn); border-color: rgba(245, 197, 66, 0.35); }
 .badge.sprint { color: var(--accent); border-color: rgba(78, 161, 255, 0.45); }
+.badge.setup {
+  color: #c9b8ff; border-color: rgba(170, 140, 255, 0.45); max-width: 160px;
+  overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+}
 
 .note-text { cursor: text; display: inline-block; min-width: 60px; color: var(--text); }
 .note-text.placeholder { color: var(--muted); opacity: 0.6; }
 .note-input { width: 200px; padding: 3px 6px; font-size: 13px; }
+
+/* ---------------- 分段 / 理论最佳 ---------------- */
+.sec-empty { padding: 8px 2px; }
+.sec-summary { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-bottom: 10px; }
+.sec-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
+.sec-stat .big { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.sec-stat .gain-t { color: var(--gain); }
+.sec-card .table-wrap { max-height: none; }
+.sec-table, .sec-matrix { font-size: 13.5px; }
+.sec-table th, .sec-matrix th { white-space: nowrap; font-weight: 600; color: var(--muted); }
+.sec-table td { white-space: nowrap; vertical-align: middle; }
+.sec-table .c-seg { font-weight: 700; }
+.sec-table .c-seg small { margin-left: 4px; font-weight: 400; }
+.sec-table .c-seg .sec-name { font-weight: 700; color: var(--text); font-size: 14px; padding: 2px 0; }
+.sec-table .c-seg .sec-name:hover { color: var(--accent); }
+.sec-table .c-time, .sec-table .c-med { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sec-table .c-std { min-width: 150px; }
+.sec-table .c-std .bar { display: block; height: 4px; margin-top: 3px; background: var(--panel-2); border-radius: 2px; overflow: hidden; max-width: 140px; }
+.sec-table .c-std .bar i { display: block; height: 100%; background: var(--warn); border-radius: 2px; }
+.sec-table .c-std .disp { display: block; font-size: 11px; margin-top: 2px; white-space: normal; }
+.sec-table tr.worst td { background: rgba(245, 197, 66, 0.07); }
+.sec-table tr.worst .c-std .mono { color: var(--warn); font-weight: 700; }
+.sec-name-input { width: 120px; padding: 3px 6px; font-size: 13px; }
+.sec-matrix td, .sec-matrix th { text-align: center; padding: 5px 7px; }
+.sec-matrix td { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
+.sec-matrix tbody th { text-align: left; white-space: nowrap; }
+.sec-matrix tbody th small { margin-left: 6px; }
+.sec-matrix td.best { color: var(--gain); font-weight: 700; }
+.sec-matrix tbody tr { height: 34px; }
+.sec-matrix td.out { color: var(--muted); text-decoration: line-through; }
+.sec-matrix tr.row-b th { box-shadow: inset 3px 0 0 var(--accent-2); }
+.sec-matrix tr.row-a th { box-shadow: inset 3px 0 0 var(--accent); }
+.sec-note { margin-top: 8px; }
 
 /* ---------------- 对比：头部 ---------------- */
 .cmp-head { display: flex; gap: 14px 22px; align-items: center; flex-wrap: wrap; }
@@ -143,6 +180,13 @@ button.link.danger { color: var(--bad); }
 .readout .gain { color: var(--gain); }
 .readout .seg { color: var(--text); }
 .chart-title { font-size: 12px; color: var(--muted); margin: 10px 0 0 4px; }
+.picker-wrap { position: relative; }
+.extra-picker {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: min(300px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; margin: 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.extra-picker .chk { color: var(--text); }
 .chart-hint { margin-top: 6px; }
 #charts .uplot { width: 100%; }
 #charts .u-select { background: rgba(78, 161, 255, 0.12); }
@@ -156,6 +200,10 @@ button.link.danger { color: var(--bad); }
   background: linear-gradient(90deg, var(--gain), var(--neutral) 50%, var(--bad));
 }
 .map-empty { color: var(--muted); font-size: 13px; padding: 30px 10px; text-align: center; }
+.map-legend.zoom { flex-wrap: wrap; gap: 4px 12px; }
+.map-legend.zoom .lk { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.map-legend.zoom .sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.map-legend.zoom svg { width: 11px; height: 11px; fill: var(--muted); }
 
 /* ---------------- 逐弯列表 ---------------- */
 .seg-sort { display: inline-flex; gap: 4px; }
@@ -182,6 +230,15 @@ button.link.danger { color: var(--bad); }
 .seg-dt .bar i { display: block; height: 100%; border-radius: 2px; margin-left: auto; }
 .seg-dt.loss .bar i { background: var(--bad); }
 .seg-dt.gain .bar i { background: var(--gain); }
+.seg-note { margin-top: 0; padding-top: 8px; border-top: 1px solid var(--line); line-height: 1.45; }
+
+/* ---------------- 新圈提示 ---------------- */
+.toast {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 50;
+  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--accent); color: var(--text); font-size: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
 
 /* ---------------- 窄屏（手机） ---------------- */
 @media (max-width: 980px) {
@@ -196,6 +253,12 @@ button.link.danger { color: var(--bad); }
   .fctl select { flex: 1; max-width: none; min-width: 0; }
   .fctl input { flex: 1; width: auto; min-width: 0; }
   .lap-table .c-date, .lap-table .c-note { display: none; }
+  .sec-table .c-range, .sec-table .c-med, .sec-table .c-n { display: none; }
+  .sec-table .c-std { min-width: 110px; }
+  .sec-table td, .sec-table th { padding-left: 6px; padding-right: 6px; }
+  .sec-stat { flex-basis: 140px; }
+  .sec-stat .big { font-size: 19px; }
+  .badge.setup { max-width: 96px; }
   .table-wrap { max-height: 300px; }
   .cmp-total .big { font-size: 26px; }
   .cmp-head { gap: 10px 16px; }

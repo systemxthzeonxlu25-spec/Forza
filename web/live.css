@@ -110,6 +110,12 @@
   /* 每 1000 rpm 一条刻度线，宽度由 live.js 按最高转速设置 --tick */
   background: repeating-linear-gradient(90deg, transparent 0 calc(var(--tick, 12.5%) - 2px), rgba(0, 0, 0, .55) calc(var(--tick, 12.5%) - 2px) var(--tick, 12.5%));
 }
+/* 这一挡的换挡点（实测换挡点更亮）；位置由 live.js 设置 --shift-at */
+.rpm-track::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: var(--shift-at, 200%); width: 2px; margin-left: -1px;
+  background: rgba(255, 255, 255, .25);
+}
+.shift-measured .rpm-track::after { background: var(--text); width: 3px; }
 .rpm-warn .rpm-fill { background: linear-gradient(90deg, #b88a10, var(--warn)); }
 .rpm-shift .rpm-fill { background: var(--bad); animation: shiftflash .16s steps(1) infinite; }
 .rpm-shift .rpm-track { border-color: var(--bad); }
@@ -185,6 +191,11 @@
 .delta { font-size: 11vmin; font-size: min(44cqh, 14cqw); font-weight: 800; line-height: 1.05; white-space: nowrap; }
 .delta.good { color: var(--good); }
 .delta.bad { color: var(--bad); }
+.delta.tentative { opacity: .55; font-style: italic; }      /* 起步圈：差距只供参考 */
+.delta-note {
+  margin-top: 3px; color: var(--warn); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 3vmin; font-size: min(10cqh, 3.6cqw);
+}
 .delta-bar { position: relative; height: clamp(6px, 7cqh, 12px); background: var(--panel-2); border-radius: 4px; overflow: hidden; margin-top: 2px; }
 .delta-bar i {
   position: absolute; top: 0; bottom: 0; left: 50%; width: 50%;
@@ -209,9 +220,10 @@
     align-items: start;
     padding: 8px 10px;
   }
-  .lap-delta .lbl { font-size: min(5cqh, 9cqw); }
+  .lap-delta .lbl { font-size: min(5cqh, 9cqw); white-space: normal; }   /* 横屏这一栏窄而高：参照圈说明可以折行 */
   .delta { font-size: min(22cqh, 29cqw); }
   .delta-bar { height: clamp(6px, 3cqh, 14px); }
+  .delta-note { font-size: min(4.5cqh, 8cqw); white-space: normal; }
   .lap-rows { align-self: center; justify-content: center; }
   .lap-rows .row { font-size: min(6.5cqh, 9.5cqw); }
   .lap-rows .row.big { font-size: min(9cqh, 11.5cqw); }
@@ -315,6 +327,45 @@
   .ov-p { margin: 3px 0; }
 }
 
+/* ---------------- 本圈小结卡片（新圈存好后弹 10 秒，点一下收起） ---------------- */
+.sumcard {
+  position: absolute; z-index: 20;
+  left: var(--gap); right: var(--gap); bottom: calc(var(--bar-h) + var(--gap) * 2);
+  max-height: 58%; overflow: hidden;
+  padding: 10px 14px 12px; border-radius: 12px;
+  background: #10141a; border: 1px solid var(--accent);
+  box-shadow: 0 6px 30px rgba(0, 0, 0, .7);
+  cursor: pointer;
+  font-size: clamp(14px, 3.6vmin, 18px); line-height: 1.35;
+}
+.sumcard.first { border-color: var(--muted); }
+.sc-head { display: flex; align-items: baseline; gap: 10px; }
+.sc-head b { font-size: 1.15em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sc-delta { font-size: 1.5em; font-weight: 800; margin-left: auto; white-space: nowrap; }
+.sc-delta.good { color: var(--good); }
+.sc-delta.bad { color: var(--bad); }
+.sc-x { color: var(--muted); font-size: 1.2em; line-height: 1; padding-left: 4px; }
+.sc-sum { margin: 4px 0 2px; font-weight: 600; }
+.sc-top { margin: 2px 0; padding-left: 1.1em; }
+.sc-top li { margin: 1px 0; }
+.sc-note { margin: 4px 0 0; color: var(--muted); font-size: .85em; }
+.sc-note:empty, .sc-top:empty { display: none; }
+.sc-timer {
+  position: absolute; left: 0; bottom: 0; height: 3px; width: 100%;
+  background: var(--accent); transform-origin: left center;
+  animation: sctimer 10s linear forwards;
+}
+@keyframes sctimer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+/* 横屏：只盖住右边的轮胎 + G 球两栏（列宽比例见 .dash 的横屏 grid：0.95 / 1.3 / 1.1 / 0.8），不挡差距和车速 */
+@media (orientation: landscape) {
+  .sumcard {
+    left: auto;
+    width: calc((100% - var(--gap) * 5) * 1.9 / 4.15 + var(--gap));
+    max-height: calc(100% - var(--rpm-h) - var(--bar-h) - var(--gap) * 5);
+    font-size: clamp(13px, 3.4vmin, 17px);
+  }
+}
+
 /* ---------------- 菜单 ---------------- */
 .menu {
   position: fixed; inset: 0; z-index: 50;
@@ -323,9 +374,45 @@
   padding-top: max(8px, env(safe-area-inset-top));
 }
 .menu-card {
-  width: min(340px, 100%); max-height: 100%; overflow: auto;
+  width: min(380px, 100%); max-height: 100%; overflow: auto; overscroll-behavior: contain;
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
 }
+/* 菜单里的输入框要能选字（面板整体禁止选中，防止误触） */
+.menu input { -webkit-user-select: text; user-select: text; width: 100%; font-size: 16px; }   /* 16px：iPhone 聚焦时不放大页面 */
+.menu-cols { display: flex; flex-direction: column; gap: 4px; }
+.menu-sec { border-top: 1px solid var(--line); padding: 8px 0 4px; min-width: 0; }
+.menu-sec h3 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+.menu-sec p.small { margin: 4px 0; }
+.menu-sec button:disabled { opacity: .45; cursor: not-allowed; border-color: var(--line); }
+.shift-src { text-align: right; line-height: 1.35; }
+.path { word-break: break-all; font-size: 11.5px; }
+
+/* 本圈小结列表 */
+.sum-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.sum-item { background: var(--panel-2); border-radius: 8px; padding: 6px 8px; cursor: pointer; font-size: 13px; }
+.si-head { display: flex; gap: 8px; align-items: baseline; }
+.si-head .mono { margin-left: auto; font-weight: 700; }
+.si-head .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.si-sum { color: var(--text); opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.si-more { display: none; margin-top: 4px; }
+.si-more ul { margin: 0 0 4px; padding-left: 1.1em; }
+.si-more p { margin: 0 0 4px; }
+.sum-item.open .si-sum { white-space: normal; }
+.sum-item.open .si-more { display: block; }
+
+/* 调校版本 */
+.setup-cur { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-form { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+.form-btns { display: flex; gap: 8px; }
+.form-msg { color: var(--warn); margin: 0; }
+.form-msg:empty { display: none; }
+
+/* 录制 */
+.rec-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0; }
+.rec-row .seg button { padding: 5px 10px; }
+#btn-rec.rec-on { border-color: var(--bad); color: var(--bad); }
+.rec-state, .rec-result { margin: 4px 0; }
+.rec-result:empty { display: none; }
 .menu-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .menu-links { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
 .menu-links a {
@@ -333,12 +420,23 @@
 }
 .menu-links a:hover { text-decoration: none; border-color: var(--accent); }
 .set-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 5px 0; }
+.set-row > span:first-child:not(.setup-cur) { flex: 0 0 auto; white-space: nowrap; }
+.setup-cur { flex: 1 1 auto; }
+#btn-setup { flex: 0 0 auto; white-space: nowrap; }
 .seg { display: inline-flex; }
 .seg button { border-radius: 0; padding: 5px 12px; }
 .seg button:first-child { border-radius: 8px 0 0 8px; }
 .seg button:last-child { border-radius: 0 8px 8px 0; }
 .seg button + button { border-left: none; }
 .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* 横屏：菜单变宽，页面链接排一行，各节分两栏流式排（不按行对齐，省高度） */
+@media (orientation: landscape) and (min-width: 700px) {
+  .menu-card { width: min(800px, 100%); }
+  .menu-links { grid-template-columns: none; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; margin-bottom: 6px; }
+  .menu-links a { padding: 7px 4px; }
+  .menu-cols { display: block; column-count: 2; column-gap: 20px; }
+  .menu-sec { break-inside: avoid; }
+}
 
 /* ---------------- 小提示 ---------------- */
 .toast {
