@@ -56,6 +56,9 @@ class Runtime:
             "http_port": self.cfg.http_port,
             "lan_ips": lan_ips(),
             "replay": self.replay_path,
+            # 已经写进数据库的圈数 / 最新一圈 id：网页轮询发现变化就自动刷新圈列表
+            "saved_count": len(self.saver.saved_ids),
+            "last_saved_lap_id": self.saver.saved_ids[-1] if self.saver.saved_ids else None,
         }
 
     async def _tick(self) -> None:

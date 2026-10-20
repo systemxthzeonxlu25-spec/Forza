@@ -120,6 +120,21 @@ class Store:
     def close(self) -> None:
         self._db.close()
 
+    # ---------------- 通用 SQL（新模块可以自己建表 / 查表，不用改这个文件） ----------------
+    def query(self, sql: str, args=()) -> list[dict]:
+        """执行查询，返回 dict 列表。"""
+        return [dict(r) for r in self._q(sql, args)]
+
+    def execute(self, sql: str, args=()) -> int:
+        """执行写操作并提交，返回 lastrowid。"""
+        return self._x(sql, args)
+
+    def executescript(self, sql: str) -> None:
+        """执行多条语句（建表用，CREATE TABLE IF NOT EXISTS 对老库也安全）。"""
+        with self._lock:
+            self._db.executescript(sql)
+            self._db.commit()
+
     def _q(self, sql: str, args=()) -> list[sqlite3.Row]:
         with self._lock:
             return self._db.execute(sql, args).fetchall()

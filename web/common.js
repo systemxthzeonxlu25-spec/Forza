@@ -6,6 +6,7 @@
     { href: "/", label: "实时面板", key: "live" },
     { href: "/laps.html", label: "圈速对比", key: "laps" },
     { href: "/tuning.html", label: "调车诊断", key: "tuning" },
+    { href: "/car.html", label: "车辆调校", key: "car" },
     { href: "/connect.html", label: "连接手机", key: "connect" },
   ];
 
@@ -61,6 +62,7 @@
     async function poll() {
       try {
         const s = await api("/api/status");
+        checkLapsChanged(s);
         const age = s.since_last_packet;
         const dot = age === null ? "" : age < 2 ? "on" : "stale";
         const txt = age === null ? "无数据" : age < 2 ? `${s.game_name || ""} ${Math.round(s.pps)} 包/秒` : `${Math.round(age)} 秒没收到包`;
@@ -73,9 +75,35 @@
     setInterval(poll, 2000);
   }
 
+  // 新圈落盘广播：saved_count 变大时派发 window 事件 "forza:laps-changed"（第一次轮询只记录、不派发）。
+  // 页面里用 Forza.onLapsChanged(fn) 订阅；fn 收到 {saved_count, last_saved_lap_id}。
+  let lastSaved = null;
+  function checkLapsChanged(s) {
+    if (typeof s.saved_count !== "number") return;
+    if (lastSaved !== null && s.saved_count > lastSaved) {
+      window.dispatchEvent(new CustomEvent("forza:laps-changed", {
+        detail: { saved_count: s.saved_count, last_saved_lap_id: s.last_saved_lap_id },
+      }));
+    }
+    lastSaved = s.saved_count;
+  }
+
+  function onLapsChanged(fn) {
+    window.addEventListener("forza:laps-changed", (e) => fn(e.detail));
+  }
+
+  // 没有导航栏的页面（例如全屏实时面板）也可以单独开启轮询
+  function watchStatus(intervalMs = 2000) {
+    const tick = async () => {
+      try { checkLapsChanged(await api("/api/status")); } catch (_) { /* 忽略 */ }
+    };
+    tick();
+    return setInterval(tick, intervalMs);
+  }
+
   function qs(name) {
     return new URLSearchParams(location.search).get(name);
   }
 
-  window.Forza = { fmtLap, fmtDelta, carClass, DRIVETRAIN, api, nav, qs };
+  window.Forza = { fmtLap, fmtDelta, carClass, DRIVETRAIN, api, nav, qs, onLapsChanged, watchStatus, checkLapsChanged };
 })();
