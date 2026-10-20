@@ -7,4 +7,5 @@ tire_temp_unit = "F"     # 游戏发来的胎温单位（社区共识是华氏�
 live_hz = 20             # 实时面板刷新频率
 db_path = "data/forza.db"
 rec_dir = "recordings"
+record_buffer_minutes = 10   # 内存里保留最近几分钟原始包，实时面板菜单可“保存刚才 N 分钟”（0 = 关闭）
 # forward = ["127.0.0.1:20777"]   # 同时把原始包转发给 SimHub 等其他程序
