@@ -627,3 +627,42 @@ def test_family_fh_circuit():
     assert res.truth["family"] == "fh"
     assert all(f.family == "fh" and f.hzn_car_group == 3 for _, f in res.records)
     check_lap_fields(res)
+
+
+# ---------------------------------------------------------------- 线后发车格起步（可选参数，默认关）
+
+def test_grid_offset_default_unchanged():
+    """grid_offset_m 默认 0：输出和不传这个参数完全一样，truth 里也没有 start_grid。"""
+    a = generate("circuit", laps=2, hz=20, seed=5)
+    b = generate("circuit", laps=2, hz=20, seed=5, grid_offset_m=0)
+    assert a.truth == b.truth and "start_grid" not in a.truth
+    assert [(t, f.to_dict()) for t, f in a.records] == [(t, f.to_dict()) for t, f in b.records]
+
+
+def test_grid_offset_standing_start_behind_line():
+    """发车格在线后 200 m：第一圈从发车格算起、长 200 m；之后的飞驰圈不受影响；埋的问题照样在。"""
+    off = 200
+    res = generate("circuit", family="fh", laps=4, hz=30, seed=2, grid_offset_m=off)
+    tr = res.truth
+    L = tr["track"]["length_m"]
+    assert tr["start_grid"]["offset_m"] == off and tr["laps"][0]["grid_extra_m"] == off
+    fr = race(res)
+    lapn, dist = col(fr, "lap_number"), col(fr, "distance")
+    # 起步静止、在起跑线后 200 m（沿主直道），lap_number = 0
+    trk = build_circuit()
+    p = trk.sample(np.array([L - off]))
+    assert fr[0].speed == pytest.approx(0.0, abs=1e-6) and lapn[0] == 0
+    assert (fr[0].pos_x, fr[0].pos_z) == pytest.approx((float(p["x"][0]), float(p["z"][0])), abs=0.5)
+    # 刚起步压过线（距离 200 m）不算过线；跑满 200 m + 一整圈后 lap_number 才 +1
+    first_cross = int(np.nonzero(lapn >= 1)[0][0])
+    assert dist[first_cross] == pytest.approx(off + L, abs=2.0)
+    assert np.all(lapn[dist < off + L - 2.0] == 0)
+    # 每圈过线处的距离间隔 = 一整圈
+    crosses = [dist[int(np.nonzero(lapn >= k)[0][0])] for k in range(1, 5)]
+    assert np.diff(crosses) == pytest.approx([L] * 3, abs=2.0)
+    assert tr["laps"][0]["lap_time"] > max(l["lap_time"] for l in tr["laps"][1:]) + 3
+    assert tr["issues"]["slow_corner"]["lap_number"] == 2 and tr["issues"]["slow_corner"]["expected_time_loss_s"] > 0.3
+    with pytest.raises(ValueError):
+        generate("circuit", laps=2, grid_offset_m=900)            # 起跑线前的直道没这么长
+    with pytest.raises(ValueError):
+        generate("sprint", family="fh", grid_offset_m=100)

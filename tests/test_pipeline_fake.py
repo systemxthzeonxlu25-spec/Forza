@@ -115,3 +115,32 @@ def test_freeroam(tmp_path):
     write_fake_recording(p, "fh", "freeroam")
     _, det, laps = _split(p)
     assert laps == []
+
+
+def test_fh_grid_start_behind_line_single_track(tmp_path):
+    """FH 赛道赛从线后发车格静止起步（第一圈比飞驰圈长 > 4%）：不再拆成两条赛道，参考圈长取飞驰圈中位数。"""
+    from forza.storage import TRACK_LENGTH_TOL
+    p = tmp_path / "g.frec"
+    truth = write_fake_recording(p, "fh", laps=4, seed=2, grid_offset_m=200)
+    L = truth["track"]["length_m"]
+    store = Store(tmp_path / "t.db")
+    for _ in range(2):                         # 跑两次（两次会话），第二次的起步圈也要认对赛道
+        hub = Hub()
+        det = LapDetector()
+        saver = LapSaver(store, "t", background=False)
+        det.add_listener(saver)
+        hub.subscribe(det.on_frame)
+        import_file(p, hub)
+        det.flush()
+    laps = sorted(store.list_laps(), key=lambda l: l["id"])
+    assert len(laps) == 8
+    first = [l for l in laps if "first_lap" in l["flags"]]
+    flying = [l for l in laps if "first_lap" not in l["flags"]]
+    assert len(first) == 2
+    # 这个用例确实能触发老问题：起步圈比飞驰圈长出 4% 以上
+    assert (first[0]["distance_m"] - flying[0]["distance_m"]) / flying[0]["distance_m"] > TRACK_LENGTH_TOL
+    assert first[0]["distance_m"] == pytest.approx(L + 200, abs=5)
+    assert len({l["track_id"] for l in laps}) == 1 and len(store.list_tracks()) == 1
+    assert store.list_tracks()[0]["ref_length_m"] == pytest.approx(L, abs=5)
+    for l, t in zip(laps[:4], truth["laps"]):
+        assert l["lap_time"] == pytest.approx(t["lap_time"], abs=0.002)

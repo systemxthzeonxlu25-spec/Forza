@@ -1,0 +1,137 @@
+/* 车辆调校页（car.html）。颜色变量来自 common.css；版本 A = --accent（蓝），版本 B = --accent-2（橙），和对比页一致。 */
+:root {
+  --gain: #2ec4b6;      /* 变快（青色，红绿色盲也分得开） */
+}
+
+.car-page { max-width: 1200px; }
+.car-page h1 { font-size: 20px; margin: 0; }
+.car-page h2 { font-size: 16px; margin: 0; }
+.small { font-size: 13px; }
+.grow { flex: 1; }
+.car-title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 12px; }
+.card-head { display: flex; align-items: baseline; gap: 6px 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.car-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; }
+.car-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; min-width: 0; flex: 0 1 220px; }
+.car-field-wide { flex: 1 1 320px; max-width: 560px; }
+.car-field select, .car-field input { width: 100%; min-width: 0; font-size: 15px; }
+.car-msg { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+.car-msg.err { color: var(--bad); }
+.small-btn { padding: 4px 10px; font-size: 13px; border-radius: 7px; white-space: nowrap; }
+button.link { background: none; border: none; padding: 2px 4px; color: var(--accent); font-size: 13px; }
+button.link:hover { text-decoration: underline; }
+button[disabled] { opacity: .6; cursor: progress; }
+.tag-a, .tag-b {
+  display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 5px;
+  text-align: center; color: #0d0f12; font-weight: 700; font-size: 12px; line-height: 1.5;
+}
+.tag-a { background: var(--accent); }
+.tag-b { background: var(--accent-2); }
+.tip { margin: 0 0 10px; color: var(--muted); }
+.tip b { color: var(--text); font-weight: 600; }
+.hint {
+  margin: 6px 0 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
+  background: rgba(245, 197, 66, 0.10); border: 1px solid rgba(245, 197, 66, 0.35); color: var(--text);
+}
+.hint::before { content: "⚠ "; color: var(--warn); }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* ---------------- 新建版本 ---------------- */
+.setup-form {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
+}
+.setup-form input { background: var(--panel); }
+.setup-form-btns { display: flex; gap: 8px; }
+.setup-form-tip { flex-basis: 100%; margin: 0; }
+.setup-form .car-msg { flex-basis: 100%; margin: 0; }
+
+/* ---------------- 版本列表 ---------------- */
+.setup-list { display: flex; flex-direction: column; gap: 8px; }
+.setup-row {
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--panel-2);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: start;
+}
+.setup-row.current { border-color: rgba(78, 161, 255, 0.6); }
+.setup-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.setup-name strong { font-size: 15px; overflow-wrap: anywhere; }
+.setup-name .note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.badge-cur {
+  font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent);
+  white-space: nowrap; line-height: 1.6;
+}
+.setup-stats { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 16px; font-size: 13px; color: var(--muted); }
+.setup-stats b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.setup-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.setup-row .hint { grid-column: 1 / -1; }
+.setup-edit { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.setup-edit input { flex: 1 1 180px; min-width: 0; background: var(--panel); }
+.empty { color: var(--muted); font-size: 14px; padding: 6px 0; }
+
+/* ---------------- 版本对比 ---------------- */
+.cmp-out { margin-top: 14px; }
+.verdict {
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--line);
+  background: var(--panel-2); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
+}
+.verdict .big { font-size: 22px; font-weight: 700; white-space: nowrap; }
+.verdict .msg { font-size: 14px; flex: 1 1 260px; min-width: 0; }
+.verdict.faster { border-color: rgba(46, 196, 182, 0.6); }
+.verdict.faster .big { color: var(--gain); }
+.verdict.slower { border-color: rgba(255, 92, 92, 0.6); }
+.verdict.slower .big { color: var(--bad); }
+.verdict.noise .big { color: var(--text); }
+.verdict.few .big { color: var(--warn); }
+.cmp-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.stat .k { color: var(--muted); font-size: 12px; }
+.stat .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stat .v small { font-weight: 400; color: var(--muted); font-size: 12px; }
+.strip { width: 100%; display: block; margin: 4px 0 6px; }
+.strip text { fill: var(--muted); font-size: 11px; font-family: var(--mono); }
+.strip .lbl { fill: var(--text); font-family: inherit; font-size: 12px; font-weight: 700; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+.legend i.hollow { background: none !important; border: 2px solid var(--muted); width: 9px; height: 9px; }
+.legend i.band { border-radius: 2px; background: rgba(255, 255, 255, 0.12); width: 14px; }
+.method { margin: 10px 0 0; }
+.cmp-out h3 { font-size: 14px; margin: 14px 0 6px; }
+
+/* ---------------- 表格 ---------------- */
+.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tbl-wrap table { min-width: 100%; }
+.car-page table { font-size: 13px; }
+.car-page th, .car-page td { padding: 6px 8px; white-space: nowrap; }
+.car-page td.wrap { white-space: normal; min-width: 160px; }
+.car-page td.num, .car-page th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.car-page tr.dim td { color: var(--muted); }
+.chg-fewer { color: var(--gain); }
+.chg-more { color: var(--bad); }
+.flag { font-size: 11px; color: var(--warn); margin-left: 4px; }
+.notes { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }
+.notes li { margin: 2px 0; }
+
+/* ---------------- 曲线 ---------------- */
+.chart-title { font-size: 13px; color: var(--muted); margin: 6px 0 2px; }
+.chart-title .muted { font-family: var(--mono); margin-left: 8px; }
+.chart-box { width: 100%; min-height: 40px; }
+.pi-wrap select { padding: 2px 6px; font-size: 13px; }
+.uplot { font-family: inherit; }
+
+/* ---------------- 改终传 ---------------- */
+.fd-out { margin-top: 12px; }
+.fd-out .verdict { margin-bottom: 10px; }
+.verdict.ok .big { color: var(--gain); }
+.verdict.close .big { color: var(--warn); }
+.verdict.limiter .big { color: var(--bad); }
+.verdict.none .big { color: var(--muted); }
+
+@media (max-width: 600px) {
+  .car-field { flex: 1 1 100%; max-width: none; }
+  .car-row > button { flex: 1 1 auto; }
+  .setup-row { grid-template-columns: minmax(0, 1fr); }
+  .setup-actions { justify-content: flex-start; }
+  .verdict .big { font-size: 19px; }
+  #cmp-form .car-field { flex: 1 1 calc(50% - 6px); }
+  #cmp-form .car-field:nth-child(3) { flex-basis: 100%; }
+  #fd-form .car-field { flex: 1 1 calc(50% - 6px); }
+}

@@ -215,3 +215,88 @@ def test_track_fingerprint_without_ordinal(tmp_path):
     c = store.find_or_create_track(start_x=100, start_z=200, length_m=4500, **kw)
     d = store.find_or_create_track(start_x=900, start_z=200, length_m=3000, **kw)
     assert a == b and len({a, c, d}) == 3
+
+
+# ---------------------------------------------------------------- 站立起步的第一圈 / 参考圈长
+
+def _meta_lap(store, track_id, dist, flags=(), kind="lap", complete=True):
+    from forza.lapdata import CHANNEL_NAMES, LapData
+    rows = [[float(i)] + [0.0] * (len(CHANNEL_NAMES) - 1) for i in range(3)]
+    lap = LapData.from_rows({"track_id": track_id, "game": "fh5", "family": "fh", "car_ordinal": 1, "kind": kind,
+                             "lap_time": 90.0, "distance_m": dist, "is_complete": complete, "flags": list(flags)}, rows)
+    return store.save_lap(lap)
+
+
+def test_first_lap_ignores_length_and_is_not_reference(tmp_path):
+    """第一圈从线后发车格起步，可能长出好几个百分点：匹配赛道时不看圈长，也不拿它当参考圈长。"""
+    store = Store(tmp_path / "t.db")
+    kw = dict(family="fh", game="fh5", kind="circuit", track_ordinal=None, start_x=100, start_z=200)
+    t1 = store.find_or_create_track(length_m=3250, first_lap=True, **kw)        # 第一次跑：先存的是起步圈
+    assert store.get_track(t1)["ref_length_m"] is None
+    t2 = store.find_or_create_track(length_m=3000, **kw)                         # 飞驰圈：比起步圈短 7.7%
+    assert t2 == t1
+    store.set_track_length(t1, 3000)
+    assert store.find_or_create_track(length_m=3250, first_lap=True, **kw) == t1   # 再来一次起步圈
+    assert store.find_or_create_track(length_m=3250, **kw) != t1                   # 不是起步圈：长 8% 就是别的布局
+    store.close()
+
+
+def test_first_lap_picks_closest_layout(tmp_path):
+    """共用起终点线的两个布局：起步圈取参考圈长最接近的那个。"""
+    store = Store(tmp_path / "t.db")
+    kw = dict(family="fh", game="fh5", kind="circuit", track_ordinal=None)
+    short = store.find_or_create_track(start_x=100, start_z=200, length_m=3000, **kw)
+    long_ = store.find_or_create_track(start_x=110, start_z=205, length_m=4500, **kw)
+    assert short != long_
+    assert store.find_or_create_track(start_x=105, start_z=200, length_m=4700, first_lap=True, **kw) == long_
+    assert store.find_or_create_track(start_x=105, start_z=200, length_m=3200, first_lap=True, **kw) == short
+    store.close()
+
+
+def test_circuit_reference_length_is_flying_median(tmp_path):
+    """赛道参考圈长 = 飞驰圈距离中位数（可变短，不是 MAX）；起步圈不参与；冲刺路线仍取最长。"""
+    store = Store(tmp_path / "t.db")
+    tid = store.find_or_create_track(family="fh", game="fh5", kind="circuit", track_ordinal=None,
+                                     start_x=0, start_z=0, length_m=3100)
+    assert store.get_track(tid)["ref_length_m"] == 3100
+    _meta_lap(store, tid, 3300, flags=["first_lap"])
+    assert store.refresh_circuit_length(tid) is None                     # 只有起步圈：不动
+    for d in (3000, 3010, 2990, 3500):
+        _meta_lap(store, tid, d)
+    _meta_lap(store, tid, 2000, complete=False)                         # 没跑完的不算
+    assert store.refresh_circuit_length(tid) == pytest.approx(3005.0)
+    assert store.get_track(tid)["ref_length_m"] == pytest.approx(3005.0)   # 从 3100 变短了
+    sp = store.find_or_create_track(family="fh", game="fh5", kind="sprint", track_ordinal=None,
+                                    start_x=5000, start_z=0, length_m=8000)
+    store.update_track_length(sp, 7000)
+    store.update_track_length(sp, 9000)
+    assert store.get_track(sp)["ref_length_m"] == 9000
+    store.close()
+
+
+def test_saver_listener_errors_are_isolated(tmp_path, caplog):
+    """存好之后的监听函数出错：只记日志，不算“存档失败”，后面的监听照样收到。"""
+    store = Store(tmp_path / "t.db")
+    det = LapDetector()
+    saver = LapSaver(store, "t", background=False)
+    seen = []
+    saver.add_listener(lambda lap: 1 / 0)
+    saver.add_listener(seen.append)
+    det.add_listener(saver)
+    s = CircleStream()
+    for f in s.run_dist(s.lap_len * 2.5):
+        det.on_frame(f)
+    det.flush()
+    assert len(store.list_laps()) == 2 and len(seen) == 2
+    assert "存档失败" not in caplog.text
+    store.close()
+
+
+def test_lap_meta_has_end_time():
+    """每圈带 ended_epoch（跑完的时刻），调校版本按它归属。"""
+    import time
+    t0 = time.time()
+    s = CircleStream()
+    det, laps = _run(s.run_dist(s.lap_len * 2.5))
+    det.flush()
+    assert all(t0 - 1 <= l.meta["ended_epoch"] <= time.time() + 1 for l in laps)

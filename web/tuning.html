@@ -34,6 +34,26 @@
         </label>
         <button type="submit" class="primary" id="tn-go">诊断</button>
       </form>
+      <div class="tn-row tn-assists">
+        <label class="tn-check" title="Data Out 不发送 ABS 状态；勾上后刹车相关结论按开着 ABS 来解读">
+          <input type="checkbox" id="tn-abs">
+          <span>我开了 ABS</span>
+        </label>
+        <label class="tn-check" title="只影响“高速推头 / 甩尾”那类结论的说法：有可调空力才建议调前后翼">
+          <span>可调空力</span>
+          <select id="tn-aero" aria-label="这车有没有可调空力">
+            <option value="">不确定</option>
+            <option value="1">有（前后翼可调）</option>
+            <option value="0">没有</option>
+          </select>
+        </label>
+        <span class="muted tn-small" id="tn-multi-hint" hidden></span>
+      </div>
+      <div class="tn-newlap" id="tn-newlap" hidden>
+        <span id="tn-newlap-text"></span>
+        <button type="button" id="tn-newlap-go">诊断这一圈</button>
+        <button type="button" class="tn-x" id="tn-newlap-x" aria-label="关闭提示">×</button>
+      </div>
       <p class="muted tn-msg" id="tn-msg" hidden></p>
     </section>
 
@@ -43,6 +63,35 @@
     <div class="tn-grid">
       <div class="tn-main">
         <section class="tn-findings" id="tn-findings"></section>
+        <section class="card tn-block tn-bal" id="tn-bal" hidden>
+          <h2>转向平衡分布 <span class="muted tn-h2-sub">平衡指数 B = 前轴 |侧偏角| − 后轴 |侧偏角|</span></h2>
+          <ul class="tn-notes" id="tn-bal-notes"></ul>
+          <h3>按车速分档</h3>
+          <div class="tn-bands" id="tn-bal-bands"></div>
+          <h3>弯 × 阶段</h3>
+          <div class="tn-scroll"><table class="tn-heat" id="tn-bal-heat"></table></div>
+          <div class="tn-heat-legend" id="tn-bal-legend"></div>
+          <details class="tn-method"><summary>怎么算的</summary><p id="tn-bal-method"></p></details>
+        </section>
+        <section class="card tn-block tn-brk" id="tn-brk" hidden>
+          <h2>刹车分析 <span class="muted tn-h2-sub">直线重刹前后轴对比 · 踏板-减速度</span></h2>
+          <ul class="tn-notes" id="tn-brk-notes"></ul>
+          <h3>直线重刹段 <span class="tn-h3-sub">前轴 / 后轴 = 这段 |滑移率| 峰值（p95），车速 = 起刹车速 km/h</span></h3>
+          <div class="tn-scroll"><table class="tn-table" id="tn-brk-zones"></table></div>
+          <h3>踏板 → 减速度（扣掉滑行减速，按车速分档）</h3>
+          <div class="tn-chart" id="tn-brk-pedal"></div>
+        </section>
+        <section class="card tn-block tn-body" id="tn-body" hidden>
+          <h2>车身与悬挂 <span class="muted tn-h2-sub">只是量化数据，用来比较改调校前后</span></h2>
+          <ul class="tn-notes" id="tn-body-notes"></ul>
+          <div class="tn-stats tn-body-stats" id="tn-body-stats"></div>
+          <h3>悬挂行程分布（p1 – p50 – p99）</h3>
+          <div class="tn-travel" id="tn-body-travel"></div>
+          <h3>悬挂速度分布</h3>
+          <div class="tn-chart" id="tn-body-damper"></div>
+          <div class="tn-scroll"><table class="tn-table tn-damper-table" id="tn-body-classes"></table></div>
+          <ul class="muted tn-small tn-caveats" id="tn-body-caveats"></ul>
+        </section>
         <section class="card tn-checks" id="tn-checks" hidden>
           <h2>检查了什么</h2>
           <ul class="tn-check-list" id="tn-check-list"></ul>

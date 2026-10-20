@@ -3,6 +3,7 @@
     from forza.fake import generate, write_fake_recording
     res = generate("circuit", laps=5)            # [(t, Frame), ...] + truth（标准答案）
     write_fake_recording("samples/demo.frec")    # 写 .frec 录像 + demo.truth.json
+    generate("circuit", family="fh", grid_offset_m=200)   # 发车格在起跑线后 200 m（第一圈更长），默认 0
 
 赛道几何见 track.py，车 / 司机 / 场景 / 埋的问题见 generator.py。
 """

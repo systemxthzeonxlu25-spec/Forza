@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>车辆调校 · Forza 遥测</title>
+  <link rel="stylesheet" href="/common.css">
+  <link rel="stylesheet" href="/vendor/uPlot.min.css">
+  <link rel="stylesheet" href="/car.css">
+</head>
+<body>
+  <main class="page car-page">
+    <!-- 选车 -->
+    <section class="card car-head">
+      <div class="car-title-row">
+        <h1>车辆调校</h1>
+        <span class="muted small">调校版本对比、实测功率曲线、各挡传动比和换挡点、改终传预测</span>
+      </div>
+      <div class="car-row">
+        <label class="car-field car-field-wide">
+          <span class="muted">车</span>
+          <select id="car-sel"><option value="">加载中…</option></select>
+        </label>
+        <span class="muted small" id="car-info"></span>
+      </div>
+      <p class="car-msg" id="car-msg" hidden></p>
+    </section>
+
+    <div id="car-body" hidden>
+      <!-- 调校版本 -->
+      <section class="card" id="sec-setups">
+        <div class="card-head">
+          <h2>调校版本</h2>
+          <span class="muted small" id="setup-cur"></span>
+          <span class="grow"></span>
+          <button type="button" class="small-btn" id="btn-new-setup">＋ 记录调校改动</button>
+        </div>
+        <form id="setup-form" class="setup-form" autocomplete="off" hidden>
+          <label class="car-field">
+            <span class="muted">版本名</span>
+            <input id="setup-name" maxlength="60" placeholder="例如：前防倾杆 +2">
+          </label>
+          <label class="car-field car-field-wide">
+            <span class="muted">改了什么（一行说明，可不填）</span>
+            <input id="setup-note" maxlength="300" placeholder="例如：前防倾杆 25 → 27，其他不变">
+          </label>
+          <div class="setup-form-btns">
+            <button type="submit" class="primary" id="setup-save">保存并设为当前</button>
+            <button type="button" id="setup-cancel">取消</button>
+          </div>
+          <p class="muted small setup-form-tip">Data Out 里没有调校数值，只能手填。保存后，从现在起跑完的圈都归到这个版本。</p>
+          <p class="car-msg err" id="setup-msg" hidden></p>
+        </form>
+        <p class="tip small" id="setup-tip">建议<b>一次只改一项</b>，改完记一个新版本、跑 5 圈以上再对比，这样才知道是哪一项起的作用。</p>
+        <div id="setup-list" class="setup-list"></div>
+      </section>
+
+      <!-- 版本对比 -->
+      <section class="card" id="sec-compare" hidden>
+        <div class="card-head"><h2>版本对比</h2><span class="muted small">只用完整飞驰圈，看差别是不是超出了驾驶误差</span></div>
+        <form class="car-row" id="cmp-form" autocomplete="off">
+          <label class="car-field"><span class="muted"><span class="tag-a">A</span> 参考版本</span><select id="cmp-a"></select></label>
+          <label class="car-field"><span class="muted"><span class="tag-b">B</span> 要看的版本</span><select id="cmp-b"></select></label>
+          <label class="car-field"><span class="muted">赛道</span><select id="cmp-track"></select></label>
+          <button type="submit" class="primary" id="cmp-go">对比</button>
+        </form>
+        <div id="cmp-out" class="cmp-out" hidden></div>
+      </section>
+
+      <!-- 功率曲线 -->
+      <section class="card" id="sec-power">
+        <div class="card-head">
+          <h2>实测功率 / 扭矩</h2>
+          <span class="muted small" id="pt-sub"></span>
+          <span class="grow"></span>
+          <label class="muted small pi-wrap" id="pi-wrap" hidden>PI <select id="pi-sel"></select></label>
+        </div>
+        <div id="pt-empty" class="muted small" hidden></div>
+        <div id="pt-charts">
+          <div class="chart-title">功率 kW <span class="muted" id="pt-readout-p"></span></div>
+          <div id="chart-power" class="chart-box"></div>
+          <div class="chart-title">扭矩 N·m <span class="muted" id="pt-readout-t"></span></div>
+          <div id="chart-torque" class="chart-box"></div>
+          <p class="muted small">竖虚线 = 各挡最佳升挡转速（按这条实测曲线算：本挡功率低于升挡后同车速下一挡功率的那一点，不交叉就在红线）。
+            曲线只覆盖全油门真正跑到过的转速段。</p>
+        </div>
+      </section>
+
+      <!-- 各挡 -->
+      <section class="card" id="sec-gears">
+        <div class="card-head"><h2>各挡传动比与换挡点</h2><span class="muted small" id="gear-sub"></span></div>
+        <div class="tbl-wrap"><table class="gear-tbl" id="gear-tbl"></table></div>
+        <ul class="notes small" id="pt-notes"></ul>
+      </section>
+
+      <!-- 改终传 -->
+      <section class="card" id="sec-final">
+        <div class="card-head"><h2>改终传预测</h2><span class="muted small">Data Out 没有终传数值，请照游戏调校界面里的“终传 / Final Drive”填</span></div>
+        <form class="car-row" id="fd-form" autocomplete="off">
+          <label class="car-field"><span class="muted">当前终传</span><input id="fd-now" type="number" step="0.01" min="0.5" max="10" inputmode="decimal" placeholder="例如 4.10"></label>
+          <label class="car-field"><span class="muted">想改成</span><input id="fd-new" type="number" step="0.01" min="0.5" max="10" inputmode="decimal" placeholder="例如 3.80"></label>
+          <button type="submit" class="primary" id="fd-go">预测</button>
+        </form>
+        <div id="fd-out" class="fd-out" hidden></div>
+      </section>
+    </div>
+  </main>
+  <script src="/common.js"></script>
+  <script src="/vendor/uPlot.iife.min.js"></script>
+  <script src="/car.js"></script>
+</body>
+</html>

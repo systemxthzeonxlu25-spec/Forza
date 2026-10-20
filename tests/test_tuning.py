@@ -66,7 +66,7 @@ def _assert_finding_shape(f):
     for k in ("id", "category", "severity", "title", "summary", "evidence", "locations", "basis", "suggestions",
               "confidence"):
         assert k in f, k
-    assert f["category"] in ("balance", "suspension", "tires", "traction", "brakes", "gearing")
+    assert f["category"] in ("balance", "suspension", "tires", "traction", "brakes", "differential", "gearing")
     assert f["severity"] in ("info", "warn", "alert")
     assert f["confidence"] in ("low", "medium", "high")
     assert f["evidence"] and all(isinstance(e, str) for e in f["evidence"])

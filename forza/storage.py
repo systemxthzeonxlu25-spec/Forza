@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import statistics
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +98,7 @@ _META_SELECT = (
 # 赛道指纹匹配阈值
 TRACK_START_RADIUS_M = 60.0   # 起点坐标相距这么近算同一个起点
 TRACK_LENGTH_TOL = 0.04       # 圈长差在 4% 以内算同一条赛道（区分共用起点线的不同布局）
+CIRCUIT_REF_RECENT = 20       # 赛道参考圈长取最近这么多圈飞驰圈的中位数
 
 
 def _now() -> str:
@@ -165,11 +167,15 @@ class Store:
 
     # ---------------- 赛道 ----------------
     def find_or_create_track(self, *, family: str, game: str, kind: str, track_ordinal: int | None,
-                             start_x: float, start_z: float, length_m: float | None) -> int:
+                             start_x: float, start_z: float, length_m: float | None,
+                             first_lap: bool = False) -> int:
         """找到（或新建）这一圈所在的赛道，返回 track id。
 
         - 有 TrackOrdinal（FM2023）：按 ordinal 识别
         - 否则按起点坐标（相距 < 60 m）+ 圈长（差 < 4%）识别；冲刺赛只看起点
+        - first_lap=True（站立起步的第一圈）：发车格在线后，这圈可能比飞驰圈长好几个百分点，
+          所以不看圈长差；起点半径内有多条赛道（共用起终点线的不同布局）时取参考圈长最接近的。
+          新建赛道时也不拿它当参考圈长（ref_length_m 先空着，等飞驰圈来了再定，见 refresh_circuit_length）
         """
         with self._lock:
             if track_ordinal:
@@ -178,13 +184,16 @@ class Store:
                 if rows:
                     return rows[0]["id"]
             else:
-                rows = self._q("SELECT * FROM tracks WHERE family=? AND kind=? AND track_ordinal IS NULL",
+                rows = self._q("SELECT * FROM tracks WHERE family=? AND kind=? AND track_ordinal IS NULL ORDER BY id",
                                (family, kind))
-                for r in rows:
-                    if r["start_x"] is None:
-                        continue
-                    if math.hypot(r["start_x"] - start_x, r["start_z"] - start_z) > TRACK_START_RADIUS_M:
-                        continue
+                cands = [r for r in rows if r["start_x"] is not None
+                         and math.hypot(r["start_x"] - start_x, r["start_z"] - start_z) <= TRACK_START_RADIUS_M]
+                if kind == "circuit" and first_lap and cands:
+                    with_len = [r for r in cands if r["ref_length_m"]]
+                    if with_len and length_m:
+                        return min(with_len, key=lambda r: (abs(r["ref_length_m"] - length_m), r["id"]))["id"]
+                    return cands[0]["id"]
+                for r in cands:
                     if kind == "circuit" and length_m and r["ref_length_m"]:
                         if abs(r["ref_length_m"] - length_m) / r["ref_length_m"] > TRACK_LENGTH_TOL:
                             continue
@@ -193,16 +202,35 @@ class Store:
             default_name = f"{'赛道' if kind == 'circuit' else '冲刺路线'} {n}"
             if track_ordinal:
                 default_name = f"赛道 #{track_ordinal}"
+            ref = None if (kind == "circuit" and first_lap) else length_m
             return self._x(
                 """INSERT INTO tracks (family, game, track_ordinal, kind, name, start_x, start_z, ref_length_m, created_at)
                    VALUES (?,?,?,?,?,?,?,?,?)""",
-                (family, game, track_ordinal, kind, default_name, start_x, start_z, length_m, _now()),
+                (family, game, track_ordinal, kind, default_name, start_x, start_z, ref, _now()),
             )
 
     def update_track_length(self, track_id: int, length_m: float) -> None:
-        """记录参考长度（冲刺路线取跑过的最长距离；赛道取第一次完整圈）。"""
+        """冲刺路线的参考长度：只增不减，取跑过的最长距离（赛道赛用 refresh_circuit_length）。"""
         self._x("UPDATE tracks SET ref_length_m = MAX(COALESCE(ref_length_m, 0), ?) WHERE id=?",
                 (length_m, track_id))
+
+    def set_track_length(self, track_id: int, length_m: float | None) -> None:
+        """直接改参考圈长（可变长也可变短）。"""
+        self._x("UPDATE tracks SET ref_length_m = ? WHERE id=?", (length_m, track_id))
+
+    def refresh_circuit_length(self, track_id: int, recent: int = CIRCUIT_REF_RECENT) -> float | None:
+        """赛道赛的参考圈长 = 最近 recent 圈完整飞驰圈（排除站立起步的第一圈）距离的中位数。
+
+        返回新的参考圈长；还没有飞驰圈时不动，返回 None。
+        """
+        rows = self._q("SELECT distance_m, flags FROM laps WHERE track_id=? AND kind='lap' AND is_complete=1 "
+                       "AND distance_m > 0 ORDER BY id DESC LIMIT ?", (track_id, recent * 3))
+        dists = [r["distance_m"] for r in rows if "first_lap" not in json.loads(r["flags"] or "[]")][:recent]
+        if not dists:
+            return None
+        ref = round(float(statistics.median(dists)), 1)
+        self.set_track_length(track_id, ref)
+        return ref
 
     def get_track(self, track_id: int) -> dict | None:
         rows = self._q("SELECT * FROM tracks WHERE id=?", (track_id,))

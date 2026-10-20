@@ -334,8 +334,11 @@ def _brake_onset(v, d, corner: Corner, look_back: float = 250.0) -> float | None
     return float(dd[idx[0]]) if len(idx) else None
 
 
-def _slow_corner_splice(track: Track, car: Car, pace: Pace, pin: _PlanInput, ref_v, ref_gear, ref_vb, L: int):
+def _slow_corner_splice(track: Track, car: Car, pace: Pace, pin: _PlanInput, ref_v, ref_gear, ref_vb, L: int,
+                        node0: int = 0):
     """① 第 SLOW_LAP 圈在慢弯附近局部重新规划，其余部分和对照组完全一样。
+
+    node0 = 起跑线所在的节点下标（线后发车格起步时 = 发车格到线的米数，默认 0 = 在线上起步）。
 
     - 弯心最低速度 ×0.92：速度系数从弯道起点的 1 余弦过渡到弯心的 0.92，再回到弯道终点的 1；
     - 刹车起点提前 25 m：司机刹得更轻（刹车力度系数用二分法解出来，正好让起点提前 25 m）。
@@ -343,7 +346,7 @@ def _slow_corner_splice(track: Track, car: Car, pace: Pace, pin: _PlanInput, ref
     """
     sc = track.role("slow_corner")
     prev_c, next_c = track.corners[sc.index - 1], track.corners[sc.index + 1]
-    base = SLOW_LAP * L
+    base = node0 + SLOW_LAP * L
     w0, w1 = base + int(prev_c.end_m) + 1, base + int(next_c.apex_m)
     sl = slice(w0, w1 + 1)
     d = pin.d[sl]
@@ -653,26 +656,34 @@ def _sub_rng(seed: int, label: str) -> tuple[random.Random, np.random.Generator]
 # ================================================================ 场景：环形赛道比赛
 
 def _race_drive(label, track: Track, car: Car, *, laps: int, hz: float, seed: int, issues: bool,
-                slow_corner: bool) -> tuple[_Drive, dict]:
-    """站立起步跑 laps 圈 + 收车。返回驾驶和附加信息（过线时刻、慢弯的时间损失等）。"""
+                slow_corner: bool, grid_offset_m: int = 0) -> tuple[_Drive, dict]:
+    """站立起步跑 laps 圈 + 收车。返回驾驶和附加信息（过线时刻、慢弯的时间损失等）。
+
+    grid_offset_m > 0：发车格在起跑线后这么多米（线后静止起步，FH / FM7 的真实情况）。
+    第一圈（lap_number=0）从发车格算起，比飞驰圈长 grid_offset_m；刚起步第一次压过线不算过线，
+    跑满 grid_offset_m + 一整圈后 lap_number 才 +1。默认 0 = 在线上起步（和原来完全一样）。
+    """
     rng, nrng = _sub_rng(seed, label)
     L = int(round(track.length_m))
-    i_finish = laps * L
+    off = int(grid_offset_m)
+    d0 = float(L - off) if off else 0.0           # 发车格在赛道上的位置（线后 off 米）
+    i_finish = off + laps * L
     n_nodes = i_finish + 400                      # 终点后再留 400 m 收车（主直道够长）
     pace = Pace()
-    pin = _plan_input(track, car, pace, rng, n_nodes=n_nodes, i_finish=i_finish)
-    info: dict = {}
+    pin = _plan_input(track, car, pace, rng, n_nodes=n_nodes, i_finish=i_finish, d0=d0)
+    info: dict = {"node0": off}
     v, gear, vb = _solve(car, pace, pin, i_finish=i_finish, v0=0.0)
     if slow_corner:
         # 对照组 = 不埋问题的同一次驾驶；埋问题的版本只在第 2 圈 T3 附近不同
-        v_s, g_s, meta = _slow_corner_splice(track, car, pace, pin, v, gear, vb, L)
+        v_s, g_s, meta = _slow_corner_splice(track, car, pace, pin, v, gear, vb, L, node0=off)
         info["ref_profile"] = _Profile.from_speeds(v, gear)
         info["slow_profile"] = prof = _Profile.from_speeds(v_s, g_s)
         info["slow_meta"] = meta
     else:
         prof = _Profile.from_speeds(v, gear)
-    t_cross = np.array([prof.t[k * L] for k in range(1, laps + 1)])
-    dr = _make_drive(label, track, car, issues=issues, hz=hz, nrng=nrng, prof=prof, t_end=t_cross[-1] + COOLDOWN_S)
+    t_cross = np.array([prof.t[off + k * L] for k in range(1, laps + 1)])
+    dr = _make_drive(label, track, car, issues=issues, hz=hz, nrng=nrng, prof=prof, t_end=t_cross[-1] + COOLDOWN_S,
+                     d0=d0)
     # ---- 比赛字段 ----
     tau = dr.tau
     lap_number = np.searchsorted(t_cross, tau, side="right")
@@ -907,15 +918,26 @@ def _base_truth(scenario, family, hz, seed, issues, car: Car, track: Track, laps
     }
 
 
-def _circuit(family, laps, hz, seed, issues, rewind, restart) -> tuple[list, dict]:
+def _grid_offset(track: Track, grid_offset_m: float) -> int:
+    """检查“发车格在线后多少米”：只能放在起跑线前那段主直道上（最后一个弯出口之后）。"""
+    off = int(round(float(grid_offset_m)))
+    room = int(track.length_m - track.corners[-1].end_m) - 10
+    if not 0 <= off <= room:
+        raise ValueError(f"grid_offset_m={grid_offset_m} 不合理：只能是 0 ~ {room}（起跑线前的主直道只有这么长）")
+    return off
+
+
+def _circuit(family, laps, hz, seed, issues, rewind, restart, grid_offset_m=0.0) -> tuple[list, dict]:
     if laps < 1:
         raise ValueError("circuit 至少跑 1 圈")
     if rewind and laps < 2:
         raise ValueError("rewind 发生在 lap_number=1，至少要 2 圈")
     track = build_circuit()
+    off = _grid_offset(track, grid_offset_m)
     car = _make_car(issues)
     slow = issues and laps > SLOW_LAP
-    main, info = _race_drive("main", track, car, laps=laps, hz=hz, seed=seed, issues=issues, slow_corner=slow)
+    main, info = _race_drive("main", track, car, laps=laps, hz=hz, seed=seed, issues=issues, slow_corner=slow,
+                             grid_offset_m=off)
     L = info["L"]
     truth = _base_truth("circuit", family, hz, seed, issues, car, track, laps, rewind, restart)
     truth["track"]["track_ordinal"] = TRACK_ORDINAL
@@ -924,7 +946,7 @@ def _circuit(family, laps, hz, seed, issues, rewind, restart) -> tuple[list, dic
     aborted = None
     if restart:
         aborted, ainfo = _race_drive("aborted", track, car, laps=2, hz=hz, seed=seed, issues=issues,
-                                     slow_corner=False)
+                                     slow_corner=False, grid_offset_m=off)
         aborted.aborted = True
         lapn = aborted.cols["lap_number"]
         j_cut = int(np.nonzero((lapn == 1) & (aborted.d >= RESTART_AT * L))[0][0])
@@ -982,6 +1004,15 @@ def _circuit(family, laps, hz, seed, issues, rewind, restart) -> tuple[list, dic
         })
         prev_t = t_rec
     truth["laps"] = laps_out
+    if off:
+        laps_out[0]["grid_extra_m"] = off
+        truth["start_grid"] = {
+            "offset_m": off, "grid_pos": [round(float(main.cols["pos_x"][0]), 3), round(float(main.cols["pos_z"][0]), 3)],
+            "first_lap_distance_m": float(off + L), "flying_lap_distance_m": float(L),
+            "description": f"发车格在起跑线后 {off} m：第一圈（lap_number=0）从发车格算起，比飞驰圈长 {off} m；"
+                           "刚起步第一次压过线不算过线，跑满一整圈后 lap_number 才 +1",
+        }
+        truth["notes"].append(f"线后静止起步：第一圈比飞驰圈长 {off} m（{off / L:.1%}）")
     truth["finish"] = {"lap_number_after_finish": laps, "cooldown_s": COOLDOWN_S,
                        "race_time_s": round(float(t_cross[-1]), 6), "t": laps_out[-1]["t_end"],
                        "note": "过终点后 lap_number = laps，race_time/current_lap 继续走，车减速 2 s，然后 1 s is_race_on=0"}
@@ -1031,7 +1062,7 @@ def _slow_corner_truth(track: Track, info: dict) -> dict:
     sc = track.role("slow_corner")
     L = info["L"]
     prof, ref, meta = info["slow_profile"], info["ref_profile"], info["slow_meta"]
-    base = SLOW_LAP * L
+    base = info.get("node0", 0) + SLOW_LAP * L
     t_lap = prof.t[base + L] - prof.t[base]
     t_ref = ref.t[base + L] - ref.t[base]
     w0, w1 = base + int(meta["onset_slow_m"]) - 10, base + int(sc.end_m) + 150
@@ -1187,12 +1218,15 @@ class FakeResult:
 
 
 def generate(scenario: str = "circuit", *, family: str = "fm", laps: int = 5, hz: float = 60.0,
-             seed: int = 1, issues: bool = True, rewind: bool = False, restart: bool = False) -> FakeResult:
+             seed: int = 1, issues: bool = True, rewind: bool = False, restart: bool = False,
+             grid_offset_m: float = 0.0) -> FakeResult:
     """生成一段假遥测。
 
     scenario：
       - "circuit"：环形赛道，菜单 1 s → 站立起步跑 laps 圈 → 收车 2 s → 结算 1 s。FM / FH 都行。
         rewind=True：lap_number=1 跑到 55% 时倒带 4 s；restart=True：先跑一次在 lap_number=1 的 60% 处重开。
+        grid_offset_m > 0：发车格在起跑线后这么多米（线后静止起步），第一圈比飞驰圈长这么多；
+        默认 0 = 在线上起步（输出和以前逐字节相同）。只对 circuit 有效。
       - "sprint"：点对点冲刺（Horizon），三次：跑完 / 50% 退出 / 跑完且更快。
       - "freeroam"：自由漫游 60 s（Horizon），不应切出任何圈。
     sprint / freeroam 只有 Horizon 有，family 会强制成 "fh"。
@@ -1203,10 +1237,10 @@ def generate(scenario: str = "circuit", *, family: str = "fm", laps: int = 5, hz
     if family not in ("fm", "fh"):
         raise ValueError(f"family 只能是 fm / fh，收到 {family!r}")
     if scenario == "circuit":
-        records, truth = _circuit(family, laps, hz, seed, issues, rewind, restart)
+        records, truth = _circuit(family, laps, hz, seed, issues, rewind, restart, grid_offset_m)
     elif scenario in ("sprint", "freeroam"):
-        if rewind or restart:
-            raise ValueError("rewind / restart 只支持 circuit 场景")
+        if rewind or restart or grid_offset_m:
+            raise ValueError("rewind / restart / grid_offset_m 只支持 circuit 场景")
         records, truth = (_sprint if scenario == "sprint" else _freeroam)(hz, seed, issues)
         if family != "fh":
             truth["notes"].append(f"{scenario} 只有 Horizon 有，family 已从 {family!r} 改成 'fh'")
@@ -1227,11 +1261,13 @@ def truth_path_for(path) -> Path:
 
 def write_fake_recording(path, fmt_key: str = "fm2023_dash", scenario: str = "circuit", *,
                          laps: int = 5, hz: float = 60.0, seed: int = 1, issues: bool = True,
-                         rewind: bool = False, restart: bool = False, total_size: int | None = None) -> dict:
+                         rewind: bool = False, restart: bool = False, total_size: int | None = None,
+                         grid_offset_m: float = 0.0) -> dict:
     """生成假数据并写成 .frec 录像 + 同名 .truth.json，返回 truth。
 
     fmt_key 决定包格式和游戏系列（fh / fh_legacy → Horizon，其余 → Motorsport）。
     total_size 比格式长时在每个包末尾补 0（模拟未知包长）。
+    grid_offset_m：线后发车格起步（见 generate），默认 0。
     """
     if fmt_key not in FORMATS:
         raise ValueError(f"未知格式 {fmt_key!r}，可选：{', '.join(FORMATS)}")
@@ -1242,13 +1278,15 @@ def write_fake_recording(path, fmt_key: str = "fm2023_dash", scenario: str = "ci
     if scenario in ("sprint", "freeroam") and family != "fh":
         raise ValueError(f"{scenario} 只有 Horizon 有，请用 Horizon 格式（fmt_key='fh' 或 'fh_legacy'）")
     res = generate(scenario, family=family, laps=laps, hz=hz, seed=seed, issues=issues, rewind=rewind,
-                   restart=restart)
+                   restart=restart, grid_offset_m=grid_offset_m)
     game = DEFAULT_GAME_BY_FORMAT.get(fmt_key, family)
     packets = [(t, encode(fr, fmt_key, total_size)) for t, fr in res.records]
     path = Path(path)
     tpath = truth_path_for(path)
     meta = {"source": "fake", "scenario": scenario, "fmt": fmt_key, "game": game, "seed": seed,
             "hz": hz, "issues": issues, "truth_file": tpath.name}
+    if grid_offset_m:
+        meta["grid_offset_m"] = grid_offset_m
     write_recording(path, packets, meta)
     truth = dict(res.truth)
     truth.update({"fmt": fmt_key, "game": game, "total_size": total_size,

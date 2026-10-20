@@ -18,6 +18,14 @@
 .tn-check select { padding: 4px 6px; }
 #tn-go { min-width: 84px; }
 #tn-go[disabled] { opacity: .6; cursor: progress; }
+.tn-assists { margin-top: 10px; gap: 6px 18px; align-items: center; }
+.tn-assists .tn-check { padding-bottom: 0; }
+#tn-multi-hint { flex: 1 1 220px; }
+.tn-newlap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; padding: 8px 10px;
+  border: 1px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 10%, var(--panel)); font-size: 14px; }
+.tn-newlap > span { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.tn-newlap button { padding: 4px 10px; font-size: 13px; }
+.tn-newlap .tn-x { border: none; background: none; color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 6px; }
 .tn-msg { margin: 10px 0 0; font-size: 13px; }
 .tn-msg.err { color: var(--bad); }
 
@@ -47,9 +55,12 @@
   .tn-main, .tn-side { display: contents; }
   .tn-map-card { order: 1; }
   .tn-findings { order: 2; }
-  .tn-checks { order: 3; }
-  .tn-dq { order: 4; }
-  .tn-na { order: 5; }
+  .tn-bal { order: 3; }
+  .tn-brk { order: 4; }
+  .tn-body { order: 5; }
+  .tn-checks { order: 6; }
+  .tn-dq { order: 7; }
+  .tn-na { order: 8; }
 }
 
 /* ---------- 严重程度 / 置信度 徽章 ---------- */
@@ -91,6 +102,9 @@
 .fd-loc { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--panel-2); max-width: 100%;
   overflow-wrap: anywhere; text-align: left; }
 .fd-loc.on { border-color: var(--accent); color: var(--accent); }
+.fd-loc-wrap { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; max-width: 100%; }
+.fd-cmp { font-size: 12px; white-space: nowrap; }
+.fd-cmp::after { content: " ›"; }
 .fd-loc.static { cursor: default; }
 .fd-loc.static:hover { border-color: var(--line); }
 .fd h4 { margin: 12px 0 4px; font-size: 13px; color: var(--muted); font-weight: 600; }
@@ -146,4 +160,98 @@
   .tn-stat .v { font-size: 15px; }
   .fd-title { font-size: 16px; }
   .tn-head-title strong { font-size: 16px; }
+}
+
+/* ---------- 分析块（转向平衡分布 / 刹车分析 / 车身与悬挂） ---------- */
+.tn-block h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
+.tn-h2-sub { font-size: 12px; font-weight: 400; }
+.tn-block h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 16px 0 8px; }
+.tn-h3-sub { font-weight: 400; font-size: 12px; }
+.tn-notes { margin: 0; padding-left: 18px; font-size: 14px; }
+.tn-notes li { margin: 4px 0; overflow-wrap: anywhere; }
+.tn-scroll { overflow-x: auto; max-width: 100%; }
+.tn-method { margin-top: 12px; font-size: 13px; }
+.tn-method summary { cursor: pointer; color: var(--muted); }
+.tn-method p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.na-hatch, .tn-heat td.na, .tn-heat-scale i.na, .tn-band.na .track {
+  background: repeating-linear-gradient(135deg, var(--panel-2) 0 5px, var(--line) 5px 7px); }
+
+/* 车速分档条：中线 = 0，往右 = 推头，往左 = 甩尾 */
+.tn-band { display: grid; grid-template-columns: minmax(0, 170px) minmax(0, 1fr) 82px; gap: 4px 10px; align-items: center;
+  font-size: 13px; margin-top: 6px; }
+.tn-band .nm { min-width: 0; overflow-wrap: anywhere; }
+.tn-band .track { position: relative; height: 16px; border-radius: 4px; background: var(--panel-2); }
+.tn-band .mid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--muted); }
+.tn-band .bar { position: absolute; top: 3px; height: 10px; }
+.tn-band .bar.pos { left: 50%; border-radius: 0 4px 4px 0; }
+.tn-band .bar.neg { right: 50%; border-radius: 4px 0 0 4px; }
+.tn-band .val { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.tn-band .na-txt { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--muted); }
+.tn-band.na .nm b { color: var(--muted); }
+.tn-band-axis { margin-top: 0; }
+.tn-band-axis .ax { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.tn-band-sub { font-size: 12px; margin: 2px 0 0 180px; }
+
+/* 弯 × 阶段热力表 */
+.tn-heat { border-collapse: separate; border-spacing: 3px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.tn-heat th { font-weight: 600; text-align: left; padding: 2px 8px 2px 0; white-space: nowrap; }
+.tn-heat thead th { color: var(--muted); font-size: 12px; text-align: center; padding: 0 0 2px; }
+.tn-heat thead th:first-child { text-align: left; }
+.tn-heat td { min-width: 70px; text-align: center; padding: 6px 6px; border-radius: 4px; color: var(--text); }
+.tn-heat td.dark { color: #0d0f12; font-weight: 600; }
+.tn-heat td.na { color: var(--muted); }
+.tn-heat-legend { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.tn-heat-scale { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.tn-heat-scale .ramp { display: inline-block; width: 150px; height: 10px; border-radius: 4px; }
+.tn-heat-scale .na-key { display: inline-flex; align-items: center; gap: 5px; }
+.tn-heat-scale i.na { display: inline-block; width: 18px; height: 10px; border-radius: 3px; }
+
+/* 普通数据表（刹车段、悬挂速度分档） */
+.tn-table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.tn-table th { color: var(--muted); font-weight: 600; font-size: 12px; text-align: left; padding: 4px 8px; white-space: nowrap;
+  border-bottom: 1px solid var(--line); }
+.tn-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.tn-table tbody th { color: var(--text); font-size: 13px; }
+.tn-table .n { text-align: right; font-variant-numeric: tabular-nums; }
+.tn-table tr.hot td { background: color-mix(in srgb, var(--warn) 8%, transparent); }
+.tn-table .em { color: var(--warn); font-weight: 700; }
+.tn-table td.loc a { white-space: nowrap; }
+.tn-table td.judge { white-space: normal; min-width: 76px; }
+.tn-table tr.more td { border-bottom: none; padding-top: 8px; }
+.tn-table tr.more button { font-size: 13px; padding: 4px 10px; }
+.tn-table td.judge .sub { display: block; font-size: 11px; }
+
+/* SVG 图 */
+.tn-chart svg { display: block; max-width: 100%; height: auto; }
+.tn-chart p { margin: 6px 0 0; }
+.tn-chart-legend { margin-top: 4px; }
+.tn-chart-legend .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: 3px; }
+
+/* 悬挂行程分布：灰底 = 0~1 全行程，色带 = p1~p99，竖线 = 中位数，右端浅黄 = 接近压到底 */
+.tn-trow { display: grid; grid-template-columns: 44px minmax(0, 1fr) 128px; gap: 4px 10px; align-items: center; font-size: 13px; margin-top: 6px; }
+.tn-trow .track { position: relative; height: 16px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
+.tn-trow .zone { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.tn-trow .band { position: absolute; top: 4px; height: 8px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 70%, var(--panel-2)); }
+.tn-trow .band.hot { background: var(--warn); }
+.tn-trow .tick { position: absolute; top: 1px; bottom: 1px; width: 2px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+.tn-trow .val { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; font-size: 12px; }
+.tn-trow .val.warn { color: var(--warn); }
+.tn-trow-axis { margin-top: 0; }
+.tn-trow-axis .ax { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
+.tn-body-stats { margin-top: 12px; }
+.tn-stat.ref { background: transparent; border: 1px dashed var(--line); }
+.tn-stat.ref .v { color: var(--muted); }
+.tn-damper-table { margin-top: 8px; }
+.tn-caveats { margin: 12px 0 0; padding-left: 18px; }
+.tn-caveats li { margin: 3px 0; overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  .tn-band { grid-template-columns: minmax(0, 1fr) 76px; }
+  .tn-band .nm { grid-column: 1 / -1; }
+  .tn-band-axis .nm { display: none; }
+  .tn-band-sub { margin-left: 0; }
+  .tn-heat td { min-width: 58px; padding: 6px 3px; }
+  .tn-trow { grid-template-columns: 36px minmax(0, 1fr) 108px; gap: 4px 8px; }
+  .tn-table th, .tn-table td { padding: 5px 5px; }
+  .tn-table .spd { display: none; }
 }

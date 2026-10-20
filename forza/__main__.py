@@ -133,7 +133,7 @@ def cmd_fake(args) -> None:
     out = Path(args.output or f"samples/demo_{fmt}_{args.scenario}.frec")
     truth = write_fake_recording(out, fmt, args.scenario, laps=args.laps, hz=args.hz, seed=args.seed,
                                  issues=not args.clean, rewind=args.rewind, restart=args.restart,
-                                 total_size=args.size)
+                                 total_size=args.size, grid_offset_m=args.grid_offset)
     print(f"已生成 {out}")
     for lap in truth.get("laps", []):
         print(f"  第 {lap['lap_number']} 圈 {_fmt_time(lap['lap_time'])}（{lap['kind']}）")
@@ -236,6 +236,8 @@ def main(argv=None) -> None:
     sp.add_argument("--rewind", action="store_true", help="第 2 圈中途倒带一次")
     sp.add_argument("--restart", action="store_true", help="第 2 圈中途重开比赛")
     sp.add_argument("--size", type=int, help="把包补零到这个长度（模拟未知格式）")
+    sp.add_argument("--grid-offset", type=float, default=0.0, metavar="M",
+                    help="赛道赛从起终点线后 M 米的发车格起步（第一圈会比飞驰圈长，测赛道识别用；0~260）")
     sp.set_defaults(func=cmd_fake)
 
     sp = sub.add_parser("info", help="查看录像内容")

@@ -8,14 +8,24 @@
 - 阈值全部在 tuning_rules.toml（带中文说明），文件缺失时用这里的 DEFAULT_RULES。
 
 对外接口：
-    diagnose(lap, rules=None) -> dict          单圈诊断
-    diagnose_many(laps, rules=None) -> dict    多圈合并（同车同赛道），每圈都出现的问题置信度更高
+    diagnose(lap, rules=None, corners=None, *, abs_on=None, aero=None) -> dict
+        单圈诊断。corners = 外部给的弯道表（例如 sectors.layout_corners 映射好的固定弯道表），
+        不给就用 corners.detect_corners 自己识别；abs_on / aero = 用户在页面上勾选的“我开了 ABS”/“有可调空力”
+        （None = 没说），只影响刹车 / 平衡结论的解读和措辞。
+    diagnose_many(laps, rules=None, corners=None, *, abs_on=None, aero=None) -> dict
+        多圈合并（同车同赛道），每圈都出现的问题置信度更高；corners 是和 laps 一一对应的列表（元素可为 None）
     rules_info() / get_rules()                 当前阈值（tuning_rules.toml 改了会自动重新读取）
     track_outline(lap, max_points)             画赛道小地图用的降采样坐标
 
 检查项（都在下面各自的 _check_xxx 函数里，好找好改）：
     转向平衡（按弯道阶段的转向不足 / 转向过度）、悬挂触底 / 伸到底、胎温不平衡、
-    出弯空转、刹车抱死、齿比（最高挡撞断油 / 转速余量）。
+    出弯空转（含内侧 / 外侧轮、四驱前后轴）、刹车抱死、刹车平衡（直线重刹前后轴滑移）、
+    刹车压力（踏板-减速度饱和）、差速器（入弯松刹内侧轮 / 四驱前后分配）、齿比（最高挡撞断油 / 转速余量）。
+
+分析块（不是 finding，是给页面画图的量化数据，见 _balance_block / _brake_block / _body_block）：
+    balance_map    平衡指数 B = 前轴 |侧偏角| − 后轴 |侧偏角|，按车速分档 + 弯 × 入弯/弯中/出弯 热力表 + 解读句
+    brake_analysis 直线重刹段前后轴滑移对比、踏板-减速度曲线（按车速分档）
+    body           车身与悬挂：四轮行程分位数、悬挂速度直方图、侧倾 / 点头梯度
 """
 from __future__ import annotations
 
@@ -51,6 +61,23 @@ DEFAULT_RULES: dict = {
                "alert_events": 3},
     "gearing": {"limiter_frac": 0.98, "min_duration_s": 1.0, "merge_gap_s": 0.25, "alert_total_s": 3.0,
                 "min_gear_time_s": 1.0, "headroom_frac": 0.85},
+    "brake_balance": {"min_brake": 0.50, "max_steer": 0.05, "min_speed_kmh": 60.0, "kerb_window_s": 0.10,
+                      "min_zone_s": 0.30, "slip_mark": 0.80, "peak_pct": 95.0, "bias_diff": 0.15,
+                      "min_eval_peak": 0.30, "mark_lead_s": 0.05, "min_zones": 2, "dominant_share": 0.50},
+    "brake_pressure": {"min_brake": 0.05, "max_steer": 0.05, "max_throttle": 0.05, "min_speed_kmh": 60.0,
+                       "kerb_window_s": 0.10, "pedal_bin": 0.10, "min_bin_s": 0.15, "min_bins": 4, "min_span": 0.40,
+                       "sat_frac": 0.95, "sat_warn_pedal": 0.80, "min_bins_above": 2, "full_pedal": 0.80,
+                       "speed_band_quantiles": [0.5], "speed_band_edges_kmh": [], "coast_max_pedal": 0.02,
+                       "min_coast_s": 1.0},
+    "differential": {"min_lat_g": 0.30, "lift_max_throttle": 0.15, "lift_max_brake": 0.10, "slip_limit": 1.0,
+                     "min_duration_s": 0.10, "alert_corners": 3, "sa_rise": 0.20, "sa_window_s": 0.30,
+                     "min_lift_s": 0.50, "awd_ratio": 1.6, "awd_min_slip": 0.50, "awd_min_s": 0.30},
+    "balance_map": {"speed_band_quantiles": [0.33, 0.67], "speed_band_edges_kmh": [], "min_band_s": 1.0,
+                    "tendency_b": 0.15, "tendency_share": 0.15, "color_full_b": 0.50, "top_cells": 3},
+    "body": {"kerb_window_s": 0.10, "damper_split_mm_s": 25.0, "hist_bin_mm_s": 10.0, "hist_max_mm_s": 200.0,
+             "max_gap_factor": 3.0, "roll_min_lat_g": 0.50, "steady_max_dg_s": 1.0, "pitch_min_long_g": 0.30,
+             "pitch_max_lat_g": 0.20, "cruise_max_long_g": 0.10, "near_bottom": 0.95, "near_top": 0.05,
+             "min_samples": 120, "min_fit_s": 1.0, "grade_smooth_m": 10.0},
     "confidence": {"high_factor": 4.0, "medium_factor": 1.5, "margin": 0.10},
     "multi": {"sporadic_frac": 0.5},
 }
@@ -61,12 +88,22 @@ AXLE_WHEELS = {"front": ("fl", "fr"), "rear": ("rl", "rr")}
 PHASE_CN = {"entry": "入弯", "mid": "弯中", "exit": "出弯", "straight": "直道"}
 PHASES = ("entry", "mid", "exit")
 CATEGORY_CN = {"balance": "转向平衡", "suspension": "悬挂", "tires": "轮胎", "traction": "牵引",
-               "brakes": "刹车", "gearing": "齿比"}
+               "brakes": "刹车", "differential": "差速器", "gearing": "齿比"}
 SEVERITY_RANK = {"info": 0, "warn": 1, "alert": 2}
 CONF_LEVELS = ("low", "medium", "high")
 DRIVETRAIN_CN = {0: "前驱 FWD", 1: "后驱 RWD", 2: "四驱 AWD"}
 DRIVEN_WHEELS = {0: ("fl", "fr"), 1: ("rl", "rr"), 2: WHEELS}
 DASH_CHANNELS = ("speed", "throttle", "brake", "gear", "steer")
+AXLE_CN = {"front": "前轴", "rear": "后轴"}
+
+# 所有检查项（id, 名字）：数据不足时逐项标成“没法判断”，多圈合并时按这个顺序汇总
+CHECK_LIST = (
+    ("balance", "转向平衡（转向不足 / 转向过度）"), ("suspension", "悬挂触底 / 伸到底"), ("tires", "胎温平衡"),
+    ("traction", "驱动轮空转"), ("brakes", "刹车抱死"), ("brake_balance", "刹车平衡（直线重刹时前后轴滑移）"),
+    ("brake_pressure", "刹车压力（踏板-减速度饱和）"), ("differential", "差速器（入弯松刹内侧轮 / 四驱前后分配）"),
+    ("gearing", "齿比（最高挡撞断油 / 转速余量）"),
+)
+CHECK_NAME = dict(CHECK_LIST)
 
 ONE_AT_A_TIME = "一次只改一项、每次小步改，改完跑几圈对比圈速和这里的诊断。"
 
@@ -170,6 +207,13 @@ def _wheel_code(wheels) -> str | None:
     return ",".join(ws)
 
 
+def _inner_wheels(corner: dict | None) -> tuple[str, str] | None:
+    """弯内侧的两个轮子（右弯 = 右侧轮 fr/rr，左弯 = 左侧轮 fl/rl）。方向来自 corners 的 direction（方向盘方向）。"""
+    if not corner or corner.get("direction") not in ("left", "right"):
+        return None
+    return ("fr", "rr") if corner["direction"] == "right" else ("fl", "rl")
+
+
 def _wheel_cn(code: str | None) -> str:
     if not code:
         return ""
@@ -178,6 +222,20 @@ def _wheel_cn(code: str | None) -> str:
 
 def _pct(x: float) -> str:
     return f"{x * 100:.0f}%"
+
+
+def _corner_key(code: str | None):
+    """弯道编号排序（T1 < T2 < T10）；不是 T+数字 的放最后按字母排，不会崩。"""
+    s = str(code or "")
+    return (0, int(s[1:]), s) if s[:1] == "T" and s[1:].isdigit() else (1, 0, s)
+
+
+def _corner_label(c: dict | None) -> str:
+    """弯道显示名：固定弯道表里改过的名字（label）优先，否则用编号。"""
+    if not c:
+        return ""
+    lbl = c.get("label")
+    return str(lbl) if lbl and lbl != c["name"] else c["name"]
 
 
 def _lower(conf: str, steps: int = 1) -> str:
@@ -231,8 +289,9 @@ def _finding(fid: str, category: str, severity: str, title: str, summary: str, e
 class _Ctx:
     """一圈数据 + 阈值 + 诊断过程中攒的结果。"""
 
-    def __init__(self, lap: LapData, rules: dict):
+    def __init__(self, lap: LapData, rules: dict, *, abs_on: bool | None = None, aero: bool | None = None):
         self.lap, self.r, self.meta = lap, rules, lap.meta or {}
+        self.abs_on, self.aero = abs_on, aero
         self.n = len(lap)
         self.t = np.asarray(lap["t"], float) if lap.has("t") else np.arange(self.n) / 60.0
         self.dist = np.asarray(lap["dist"], float) if lap.has("dist") else np.zeros(self.n)
@@ -246,6 +305,8 @@ class _Ctx:
         self.dash = False
         self.speed_ok = np.ones(self.n, bool)
         self.extra: dict = {}
+        self.corner_source = "none"       # "layout" = 外部给的固定弯道表；"detected" = 本圈自己识别；"none" = 没有
+        self.samples: dict = {}           # 给分析块（平衡分布 / 刹车 / 车身）攒的采样，多圈合并时直接拼起来，不进 JSON
 
     # ---- 通道 ----
     def ch(self, name: str) -> np.ndarray | None:
@@ -279,11 +340,19 @@ class _Ctx:
             return "exit"
         return "mid"
 
+    def cn(self, code: str | None) -> str:
+        """弯道的显示名：固定弯道表里用户改过名字的用 label，否则就是编号 T1…"""
+        c = next((c for c in self.corners if c["name"] == code), None)
+        return _corner_label(c) if c else (code or "")
+
+    def corner(self, code: str | None) -> dict | None:
+        return next((c for c in self.corners if c["name"] == code), None)
+
     def where(self, corner: dict | None, phase: str, d: float) -> str:
         if corner is not None:
-            return f"{corner['name']} {PHASE_CN.get(phase, phase)}"
+            return f"{_corner_label(corner)} {PHASE_CN.get(phase, phase)}"
         nxt = next((c for c in self.corners if (c.get("brake_start_m") or c["start_m"]) > d), None)
-        return f"{nxt['name']} 前的直道" if nxt else "直道"
+        return f"{_corner_label(nxt)} 前的直道" if nxt else "直道"
 
     def loc(self, i0: int, i1: int, *, wheel: str | None = None, corner: dict | None = None,
             phase: str | None = None, use_corner: bool = True) -> dict:
@@ -349,9 +418,33 @@ def _check_quality(ctx: _Ctx) -> bool:
     return True
 
 
-def _find_corners(ctx: _Ctx) -> None:
+def _normalize_corners(corners: list[dict]) -> list[dict]:
+    """外部给的弯道表（如 sectors.layout_corners）整理成 detect_corners 的样子：按位置排好、index = 列表下标，
+    缺的字段补上（min_speed / heading_change_deg 可能是 None）。"""
+    out = []
+    for c in sorted(corners, key=lambda c: float(c["apex_m"])):
+        c = dict(c)
+        c.setdefault("brake_start_m", None)
+        c.setdefault("full_throttle_m", None)
+        c.setdefault("direction", "right")
+        c["heading_change_deg"] = float(c.get("heading_change_deg") or 0.0)
+        c["min_speed"] = float(c["min_speed"]) if c.get("min_speed") is not None else float("nan")
+        c["index"] = len(out)
+        out.append(c)
+    return out
+
+
+def _find_corners(ctx: _Ctx, given: list[dict] | None = None) -> None:
     if not ctx.dash:
         return
+    if given:
+        try:
+            ctx.corners = _normalize_corners(given)
+            ctx.corner_source = "layout"
+            ctx.note("info", f"弯道编号来自这条赛道的固定弯道表（{len(ctx.corners)} 个弯，和圈速对比页一致）。")
+            return
+        except (KeyError, TypeError, ValueError) as e:
+            ctx.note("warn", f"固定弯道表格式不对（{e}），改用本圈自动识别的弯道。")
     if ctx.missing(("pos_x", "pos_z")):
         ctx.note("warn", "缺少坐标通道（pos_x / pos_z），无法识别弯道：按弯道阶段的判断全部跳过。")
         return
@@ -360,6 +453,8 @@ def _find_corners(ctx: _Ctx) -> None:
     except Exception as e:  # noqa: BLE001  弯道识别失败不应该让整个诊断崩掉
         ctx.note("warn", f"弯道识别失败（{e}），按弯道阶段的判断全部跳过。")
         ctx.corners = []
+    if ctx.corners:
+        ctx.corner_source = "detected"
     if not ctx.corners:
         ctx.note("warn", "没识别出弯道（坐标可能没变化），按弯道阶段的判断全部跳过。")
 
@@ -426,9 +521,6 @@ def _check_balance(ctx: _Ctx) -> None:
     if not ctx.dash or ctx.missing(need):
         ctx.check("balance", name, "skipped", "数据不足：需要侧偏角、油门、刹车、方向盘、横向 G。")
         return
-    if not ctx.corners:
-        ctx.check("balance", name, "skipped", "数据不足：没识别出弯道，无法按入弯 / 弯中 / 出弯分阶段判断。")
-        return
     r = ctx.r["balance"]
     g = ctx.r["general"]
     d = ctx.dist
@@ -436,6 +528,16 @@ def _check_balance(ctx: _Ctx) -> None:
     steer, glat = np.abs(ctx.ch("steer")), np.abs(ctx.ch("g_lat"))
     fa = (np.abs(ctx.ch("slip_angle_fl")) + np.abs(ctx.ch("slip_angle_fr"))) / 2
     ra = (np.abs(ctx.ch("slip_angle_rl")) + np.abs(ctx.ch("slip_angle_rr"))) / 2
+    spd_kmh = np.abs(ctx.ch("speed")) * 3.6
+    # 平衡分布（按车速分档）用所有“在转弯”的采样：横向 G ≥ min_lat_g、车速够
+    turning = (glat >= r["min_lat_g"]) & ctx.speed_ok
+    ctx.samples["balance"] = {
+        "dt": ctx.dt, "speed_kmh": spd_kmh[turning], "b": (fa - ra)[turning], "fa": fa[turning], "ra": ra[turning],
+        "cells": None, "corners": [], "corner_source": ctx.corner_source, "lap_label": _lap_label(ctx.meta),
+    }
+    if not ctx.corners:
+        ctx.check("balance", name, "skipped", "数据不足：没识别出弯道，无法按入弯 / 弯中 / 出弯分阶段判断。")
+        return
 
     # 给每个采样点标上 (弯道, 阶段)；一个点只属于一个阶段（先到先得）
     phase = np.full(ctx.n, -1)
@@ -454,6 +556,13 @@ def _check_balance(ctx: _Ctx) -> None:
             m = m & ctx.speed_ok & (phase == -1)
             phase[m] = p
             cidx[m] = c["index"]
+    # 热力表（弯 × 阶段）用分好阶段的采样
+    sel = phase >= 0
+    names = np.array([c["name"] for c in ctx.corners], dtype=object)
+    ctx.samples["balance"].update(
+        cells={"code": names[cidx[sel]], "phase": phase[sel], "b": (fa - ra)[sel], "speed_kmh": spd_kmh[sel]},
+        corners=[{"code": c["name"], "label": _corner_label(c), "direction": c["direction"],
+                  "apex_m": round(float(c["apex_m"]), 1)} for c in ctx.corners])
 
     # 哪些 (弯, 阶段) 数据够多、真正评估了
     evaluated = {p: 0 for p in range(3)}
@@ -511,7 +620,7 @@ def _check_balance(ctx: _Ctx) -> None:
 def _balance_finding(ctx: _Ctx, kind: str, pname: str, events: list[dict], sat_cn: str, other_cn: str) -> dict:
     r = ctx.r["balance"]
     total = sum(e["dur"] for e in events)
-    corners = sorted({e["corner"]["name"] for e in events}, key=lambda s: int(s[1:]))
+    corners = sorted({e["corner"]["name"] for e in events}, key=_corner_key)
     sev = "alert" if total >= r["alert_total_s"] or len(corners) >= r["alert_corners"] else "warn"
     sat_mean = float(np.average([e["sat_mean"] for e in events], weights=[e["dur"] for e in events]))
     oth_mean = float(np.average([e["oth_mean"] for e in events], weights=[e["dur"] for e in events]))
@@ -519,7 +628,7 @@ def _balance_finding(ctx: _Ctx, kind: str, pname: str, events: list[dict], sat_c
     conf = _confidence(ctx.r, total, r["min_duration_s"], margin)
     kind_cn = "转向不足" if kind == "understeer" else "转向过度"
     phase_cn = PHASE_CN[pname]
-    where = "、".join(corners)
+    where = "、".join(ctx.cn(c) for c in corners)
     if kind == "understeer":
         summary = (f"{where} {phase_cn}时前轴先超过抓地极限（|侧偏角| 平均 {sat_mean:.2f}），后轴只有 {oth_mean:.2f}："
                    "车头往弯外推，多打方向也转不进去。")
@@ -529,7 +638,7 @@ def _balance_finding(ctx: _Ctx, kind: str, pname: str, events: list[dict], sat_c
     evidence = []
     for e in events:
         evidence.append(
-            f"{e['corner']['name']} {phase_cn}（{ctx.dist[e['i0']]:.0f}–{ctx.dist[e['i1']]:.0f} m，持续 {e['dur']:.2f} s）："
+            f"{_corner_label(e['corner'])} {phase_cn}（{ctx.dist[e['i0']]:.0f}–{ctx.dist[e['i1']]:.0f} m，持续 {e['dur']:.2f} s）："
             f"{sat_cn} |侧偏角| 平均 {e['sat_mean']:.2f}、最大 {e['sat_max']:.2f}；"
             f"{other_cn}平均 {e['oth_mean']:.2f}、最大 {e['oth_max']:.2f}；两轴差平均 {e['diff_mean']:.2f}")
         evidence.append(
@@ -937,39 +1046,69 @@ def _check_traction(ctx: _Ctx) -> None:
         return
     total = sum(e["dur"] for e in events)
     sev = "alert" if total >= r["alert_total_s"] or len(events) >= r["alert_events"] else "warn"
+    rd = ctx.r["differential"]
+    ra = None
+    if not ctx.missing(("slip_angle_rl", "slip_angle_rr")):
+        ra = (np.abs(ctx.ch("slip_angle_rl")) + np.abs(ctx.ch("slip_angle_rr"))) / 2
+    k_win = max(1, round(rd["sa_window_s"] / ctx.dt))
     locs, evidence = [], []
-    both_axle_spin = single_spin = False
+    both_axle_spin = single_spin = inner_only = outer_only = sa_rise = False
     for e in events:
         code = _wheel_code(e["wheels"])
         loc = ctx.loc(e["i0"], e["i1"], wheel=code)
         locs.append(loc)
         per = "，".join(f"{WHEEL_CN[w]}平均 {e['mean'][w]:.2f}、最大 {e['peak'][w]:.2f}" for w in e["wheels"])
         evidence.append(f"{loc['label']}（持续 {e['dur']:.2f} s）：油门平均 {_pct(e['thr'])}，空转轮 |滑移率| {per}")
+        corner = ctx.corner(loc["corner"])
+        inner_side = _inner_wheels(corner) if corner else None
         for ax in ("front", "rear"):
             aw = [w for w in AXLE_WHEELS[ax] if w in driven]
-            if len(aw) == 2:
-                spun = [w for w in aw if w in e["wheels"]]
-                if len(spun) == 2:
-                    both_axle_spin = True
-                elif len(spun) == 1:
-                    single_spin = True
+            if len(aw) != 2:
+                continue
+            spun = [w for w in aw if w in e["wheels"]]
+            if len(spun) == 2:
+                both_axle_spin = True
+                # 两轮一起空转时，后轴侧偏角有没有跟着涨（车尾开始滑）
+                if ax == "rear" and ra is not None:
+                    before = ra[max(0, e["i0"] - k_win): e["i0"]]
+                    during = ra[e["i0"]: min(ctx.n, e["i1"] + k_win) + 1]
+                    if before.size and during.size:
+                        rise = float(during.max() - before.mean())
+                        if rise >= rd["sa_rise"]:
+                            sa_rise = True
+                            evidence.append(
+                                f"　同一段后轴 |侧偏角| 从 {before.mean():.2f} 升到 {during.max():.2f}（+{rise:.2f}，≥ {rd['sa_rise']:.2f}）："
+                                "两个后轮一起空转、车尾同时在滑 → 加速锁止偏高（两轮被锁在一起一起丢抓地）或者油门给早了，先试油门")
+            elif len(spun) == 1:
+                single_spin = True
+                if inner_side:
+                    w = spun[0]
+                    turn = "右弯" if corner["direction"] == "right" else "左弯"
+                    if w in inner_side:
+                        inner_only = True
+                        evidence.append(f"　只有内侧的{WHEEL_CN[w]}在空转（{_corner_label(corner)} 是{turn}，内侧轮载荷小）"
+                                        "→ 扭矩从内侧轮“漏掉”了：差速器加速锁止偏低")
+                    else:
+                        outer_only = True
+                        evidence.append(f"　只有外侧的{WHEEL_CN[w]}在空转（{_corner_label(corner)} 是{turn}）"
+                                        "→ 不是差速器偏开放的典型表现（开放差速器漏扭矩的是内侧轮）：先看是不是压了路肩 / 颠簸")
     if both_axle_spin:
         evidence.append("同一根驱动轴的左右两个轮子一起空转 → 不是差速器“漏扭矩”，而是轮上扭矩超过了这根轴的抓地")
-    if single_spin:
+    if single_spin and not (inner_only or outer_only):
         evidence.append("有时只有同轴的一个驱动轮在空转 → 扭矩从打滑的那一侧“漏掉”了，差速器偏开放")
     evidence.append(f"判定阈值：{dt_txt} 的驱动轮 |滑移率| > {r['slip_limit']:.2f}，同时油门 ≥ {_pct(r['min_throttle'])}、刹车 < {_pct(r['max_brake'])}，"
                     f"连续 ≥ {r['min_duration_s']:.2f} s。本圈 {len(events)} 次、累计 {total:.2f} s"
                     f"（累计 ≥ {r['alert_total_s']:.1f} s 或 ≥ {r['alert_events']} 次记为严重）")
     phases = {l["phase"] for l in locs}
-    corners = sorted({l["corner"] for l in locs if l["corner"]}, key=lambda s: int(s[1:]))
-    title = ("出弯空转" if phases == {"exit"} else "驱动轮空转") + (f"（{'、'.join(corners)}）" if corners else "")
+    corners = sorted({l["corner"] for l in locs if l["corner"]}, key=_corner_key)
+    title = ("出弯空转" if phases == {"exit"} else "驱动轮空转") + (f"（{'、'.join(ctx.cn(c) for c in corners)}）" if corners else "")
     tips = ["先排除驾驶：出弯给油更柔、分段踩，等车身摆正再全油"]
     if both_axle_spin:
         tips += ["驱动轴的弹簧 / 防倾杆调软一点，让驱动轮更贴地",
                  "差速器加速锁止率调低一点（两轮一起空转时可以试，调太低会变成内侧轮单独空转）",
                  "出弯用高一挡，或把低挡齿比调长一点（轮上扭矩小一些）"]
-    if single_spin:
-        tips += ["差速器加速锁止率调高一点（只有一侧空转说明差速器太开放）"]
+    if single_spin and (inner_only or not outer_only):
+        tips += ["差速器加速锁止率调高一点（只有内侧轮空转说明差速器太开放）"]
     basis = {"channels": ["slip_ratio_*（归一化滑移率，|x| > 1 = 失去抓地）", "throttle", "brake", "speed",
                           "meta.drivetrain（哪几个是驱动轮）"],
              "rule": (f"只看驱动轮（{dt_txt}）。油门 ≥ {_pct(r['min_throttle'])}、刹车 < {_pct(r['max_brake'])}、车速 ≥ {g['min_speed_ms']:.0f} m/s 时，"
@@ -984,7 +1123,8 @@ def _check_traction(ctx: _Ctx) -> None:
                                  evidence, locs, basis, tips, conf,
                                  "如果开着牵引力控制（TCS），空转会被压住；Data Out 看不到辅助设置。" + ONE_AT_A_TIME,
                                  data={"events": len(events), "total_s": round(total, 3),
-                                       "both_wheels": both_axle_spin, "single_wheel": single_spin}))
+                                       "both_wheels": both_axle_spin, "single_wheel": single_spin,
+                                       "inner_only": inner_only, "outer_only": outer_only, "rear_slip_angle_rise": sa_rise}))
     ctx.check("traction", name, "found", f"{dt_txt}：给油时驱动轮空转 {len(events)} 次、累计 {total:.2f} s，"
                                          f"|滑移率| 最大 {mx:.2f}（阈值 {r['slip_limit']:.2f}）。")
 
@@ -1056,7 +1196,7 @@ def _lock_finding(ctx: _Ctx, axle: str, other: str, events: list[dict]) -> dict:
     evidence.append(f"{len(events)} 次里有 {n_first} 次是{axle_cn}先抱死")
     evidence.append(f"判定阈值：刹车 ≥ {_pct(r['min_brake'])} 时 |滑移率| > {r['slip_limit']:.2f}，连续 ≥ {r['min_duration_s']:.2f} s。"
                     f"本圈 {len(events)} 次、累计 {total:.2f} s（累计 ≥ {r['alert_total_s']:.1f} s 或 ≥ {r['alert_events']} 次记为严重）")
-    corners = sorted({l["corner"] for l in locs if l["corner"]}, key=lambda s: int(s[1:]))
+    corners = sorted({l["corner"] for l in locs if l["corner"]}, key=_corner_key)
     if axle == "front":
         tips = ["刹车平衡往后挪 1~2%（前轮刹车力少一点）", "刹车压力调小一点（踩到底也不那么容易抱死）",
                 "先排除驾驶：别一脚踩死，刹车时少带方向（又刹又转时前轮更容易抱死）"]
@@ -1072,11 +1212,518 @@ def _lock_finding(ctx: _Ctx, axle: str, other: str, events: list[dict]) -> dict:
                            + principle_extra + "某一根轴总是先抱死，说明刹车力分配偏向这根轴（刹车平衡）或总刹车力太大。"
                            "用绝对值 + 刹车踏板区分抱死和空转，不依赖正负号。")}
     conf = _confidence(ctx.r, total, r["min_duration_s"], float(np.mean([e["mean"] for e in events])) / r["slip_limit"] - 1.0)
-    return _finding(f"brake_lock_{axle}", "brakes", sev, f"{axle_cn}刹车抱死" + (f"（{'、'.join(corners)}）" if corners else ""),
+    return _finding(f"brake_lock_{axle}", "brakes", sev, f"{axle_cn}刹车抱死" + (f"（{'、'.join(ctx.cn(c) for c in corners)}）" if corners else ""),
                     f"刹车时{axle_cn}抱死 {len(events)} 次、累计 {total:.2f} s，{other_cn}基本正常：刹车力偏向{axle_cn}或太大。",
-                    evidence, locs, basis, tips, conf,
-                    "开着 ABS 时一般不会抱死；Data Out 看不到 ABS 是否开启。" + ONE_AT_A_TIME,
-                    data={"axle": axle, "events": len(events), "total_s": round(total, 3), "first_count": n_first})
+                    evidence, locs, basis, tips, conf, _lock_caveat(ctx.abs_on) + ONE_AT_A_TIME,
+                    data={"axle": axle, "events": len(events), "total_s": round(total, 3), "first_count": n_first,
+                          "abs_on": ctx.abs_on})
+
+
+def _lock_caveat(abs_on: bool | None) -> str:
+    if abs_on is True:
+        return ("你勾选了“我开了 ABS”：开着 ABS 还出现 |滑移率| > 1，说明 ABS 介入之前轮子已经超过极限（ABS 只能压住一部分），"
+                "刹车压力 / 刹车平衡偏向这根轴的可能性更大。")
+    if abs_on is False:
+        return "没开 ABS：这里的抱死就是真的抱死，靠刹车压力、刹车平衡和踩法来解决。"
+    return "开着 ABS 时一般不会抱死；Data Out 看不到 ABS 是否开启，开了的话请在上面勾选“我开了 ABS”。"
+
+
+# ================================================================ ⑤b 刹车平衡（直线重刹时前后轴滑移）
+
+def _near_kerb(ctx: _Ctx, window_s: float) -> np.ndarray:
+    """任一轮压路肩（rumble = 1）前后 window_s 秒内的采样 = True。没有 rumble 通道时全是 False。"""
+    on = np.zeros(ctx.n, bool)
+    for w in WHEELS:
+        a = ctx.ch(f"rumble_{w}")
+        if a is not None:
+            on |= a > 0.5
+    if not on.any():
+        return on
+    k = max(1, round(window_s / ctx.dt))
+    return np.convolve(on.astype(float), np.ones(2 * k + 1), mode="same") > 0.5
+
+
+def _abs_caveat(abs_on: bool | None, what: str) -> str:
+    if abs_on is True:
+        return f"你勾选了“我开了 ABS”：ABS 会把前后轴的滑移都压在阈值附近，{what}的区分度会下降，置信度已降一级。"
+    if abs_on is None:
+        return f"开着 ABS 时{what}的区分度会下降；Data Out 看不到 ABS 状态，开了的话请在上面勾选“我开了 ABS”。"
+    return ""
+
+
+def _check_brake_balance(ctx: _Ctx) -> None:
+    cid, name = "brake_balance", CHECK_NAME["brake_balance"]
+    need = [f"slip_ratio_{w}" for w in WHEELS] + ["brake", "steer", "speed"]
+    if not ctx.dash or ctx.missing(need):
+        ctx.check(cid, name, "skipped", "数据不足：需要滑移率、刹车、方向盘、车速。")
+        return
+    r = ctx.r["brake_balance"]
+    g = ctx.r["general"]
+    brk, steer, spd = ctx.ch("brake"), np.abs(ctx.ch("steer")), np.abs(ctx.ch("speed")) * 3.6
+    fsr = (np.abs(ctx.ch("slip_ratio_fl")) + np.abs(ctx.ch("slip_ratio_fr"))) / 2
+    rsr = (np.abs(ctx.ch("slip_ratio_rl")) + np.abs(ctx.ch("slip_ratio_rr"))) / 2
+    kerb = _near_kerb(ctx, r["kerb_window_s"])
+    m = (brk >= r["min_brake"]) & (steer < r["max_steer"]) & (spd > r["min_speed_kmh"]) & ~kerb
+
+    def first_mark(a: np.ndarray) -> int | None:
+        hit = np.flatnonzero((a[:-1] >= r["slip_mark"]) & (a[1:] >= r["slip_mark"])) if a.size > 1 else np.array([])
+        return int(hit[0]) if hit.size else None
+
+    zones = []
+    for i0, i1 in _runs(m, ctx.t, g["merge_gap_s"], ctx.dt):
+        dur = ctx.dur(i0, i1)
+        if dur < r["min_zone_s"]:
+            continue
+        sl = slice(i0, i1 + 1)
+        pf, pr = float(np.percentile(fsr[sl], r["peak_pct"])), float(np.percentile(rsr[sl], r["peak_pct"]))
+        jf, jr = first_mark(fsr[sl]), first_mark(rsr[sl])
+        tf = None if jf is None else float(ctx.t[i0 + jf] - ctx.t[i0])
+        tr = None if jr is None else float(ctx.t[i0 + jr] - ctx.t[i0])
+        first = lead = None
+        if tf is not None and (tr is None or tr - tf >= r["mark_lead_s"]):
+            first, lead = "front", (None if tr is None else tr - tf)
+        elif tr is not None and (tf is None or tf - tr >= r["mark_lead_s"]):
+            first, lead = "rear", (None if tf is None else tf - tr)
+        if max(pf, pr) < r["min_eval_peak"]:
+            bias = None                                  # 刹得不够重，看不出谁先饱和
+        elif first is not None:
+            bias = first
+        elif pf - pr >= r["bias_diff"]:
+            bias = "front"
+        elif pr - pf >= r["bias_diff"]:
+            bias = "rear"
+        else:
+            bias = "balanced"
+        loc = ctx.loc(i0, i1, wheel=None if bias in (None, "balanced") else bias)
+        zones.append({"i0": i0, "i1": i1, "dur": dur, "front_peak": pf, "rear_peak": pr, "front_mark_s": tf,
+                      "rear_mark_s": tr, "first": first, "lead_s": lead, "bias": bias, "loc": loc,
+                      "speed_kmh": float(spd[i0]), "brake": float(brk[sl].mean())})
+    ctx.samples["brake_zones"] = [{**{k: z[k] for k in ("front_peak", "rear_peak", "front_mark_s", "rear_mark_s", "first",
+                                                       "lead_s", "bias", "speed_kmh", "brake")},
+                                   "duration_s": z["dur"], "location": z["loc"], "lap_label": _lap_label(ctx.meta),
+                                   "lap_id": ctx.meta.get("id")} for z in zones]
+    ev = [z for z in zones if z["bias"] is not None]
+    rule_txt = (f"直线重刹段 = 刹车 ≥ {_pct(r['min_brake'])}、|方向盘| < {_pct(r['max_steer'])}、车速 > {r['min_speed_kmh']:.0f} km/h、"
+                f"前后 {r['kerb_window_s']:.2f} s 内没压路肩，连续 ≥ {r['min_zone_s']:.2f} s")
+    if len(ev) < r["min_zones"]:
+        ctx.check(cid, name, "skipped", f"数据不足：只有 {len(ev)} 段够重的直线重刹（{rule_txt}，"
+                                        f"且某一轴滑移率峰值 ≥ {r['min_eval_peak']:.2f}；至少要 {r['min_zones']} 段）。")
+        return
+    n_f = sum(1 for z in ev if z["bias"] == "front")
+    n_r = sum(1 for z in ev if z["bias"] == "rear")
+    n_b = len(ev) - n_f - n_r
+    ctx.extra["brake_balance_counts"] = {"zones": len(ev), "front": n_f, "rear": n_r, "balanced": n_b,
+                                         "front_where": [ctx.where(None, "straight", ctx.dist[z["i0"]]) for z in ev if z["bias"] == "front"]}
+    count_txt = f"{len(ev)} 段直线重刹：前轴先饱和 {n_f} 段、后轴先饱和 {n_r} 段、前后差不多 {n_b} 段"
+    for axle, k in (("front", n_f), ("rear", n_r)):
+        other = n_r if axle == "front" else n_f
+        if k >= r["min_zones"] and k / len(ev) >= r["dominant_share"] and k > other:
+            ctx.findings.append(_brake_bias_finding(ctx, axle, ev, k, count_txt, rule_txt))
+            ctx.check(cid, name, "found", count_txt + "。")
+            return
+    ctx.check(cid, name, "ok", count_txt + f"，没有一根轴在大多数（≥ {_pct(r['dominant_share'])}）重刹段里先饱和。")
+
+
+def _brake_bias_finding(ctx: _Ctx, axle: str, ev: list[dict], k: int, count_txt: str, rule_txt: str) -> dict:
+    r = ctx.r["brake_balance"]
+    axle_cn, other_cn = AXLE_CN[axle], AXLE_CN["rear" if axle == "front" else "front"]
+    hit = [z for z in ev if z["bias"] == axle]
+    evidence = []
+    for z in hit:
+        p_hi, p_lo = (z["front_peak"], z["rear_peak"]) if axle == "front" else (z["rear_peak"], z["front_peak"])
+        mark = ""
+        if z["first"] == axle:
+            mark = (f"；{axle_cn}先到 {r['slip_mark']:.2f}" +
+                    (f"（比{other_cn}早 {z['lead_s']:.2f} s）" if z["lead_s"] is not None else f"，{other_cn}一直没到"))
+        evidence.append(f"{z['loc']['label']}（{z['dur']:.2f} s，车速 {z['speed_kmh']:.0f} km/h 起，刹车平均 {_pct(z['brake'])}）："
+                        f"{axle_cn} |滑移率| 峰值 {p_hi:.2f}、{other_cn} {p_lo:.2f}{mark}")
+    evidence.append(count_txt)
+    evidence.append(f"判定阈值：{rule_txt}；某一轴先到 {r['slip_mark']:.2f}（领先 ≥ {r['mark_lead_s']:.2f} s），"
+                    f"或两轴峰值（p{r['peak_pct']:.0f}）差 ≥ {r['bias_diff']:.2f} 算这一段偏向它；"
+                    f"≥ {r['min_zones']} 段且占 ≥ {_pct(r['dominant_share'])} 才报")
+    if axle == "front":
+        tips = ["刹车平衡往后挪 1~2%（后轮多分担一点刹车力）", "改完看这里前后轴的峰值是否接近，以及“刹车抱死”有没有变少"]
+        summary = (f"{count_txt}：多数重刹段里前轴的滑移率先到极限、后轴还有余量——"
+                   "刹车力偏向前轴，还没抱死也已经先饱和，后轴的抓地没用上。")
+    else:
+        tips = ["刹车平衡往前挪 1~2%（后轮少分担一点刹车力）", "后轴先饱和时刹车容易甩尾，入弯前先把直线刹车做稳"]
+        summary = (f"{count_txt}：多数重刹段里后轴的滑移率先到极限、前轴还有余量——"
+                   "刹车力偏向后轴，直线刹车时车尾容易不稳。")
+    conf = "high" if k >= 2 * r["min_zones"] and k / len(ev) >= 0.75 else "medium"
+    if ctx.abs_on is True:
+        conf = _lower(conf)
+    caveat = " ".join(x for x in (_abs_caveat(ctx.abs_on, "前后轴对比"), ONE_AT_A_TIME) if x)
+    basis = {"channels": ["slip_ratio_fl/fr/rl/rr（归一化滑移率，前后轴各取左右两轮 |x| 的平均）", "brake", "steer", "speed",
+                          "rumble_*（排除压路肩）"],
+             "rule": (f"{rule_txt}。每段比较前后轴 |滑移率| 的 p{r['peak_pct']:.0f} 峰值，和谁先连续两个采样到 {r['slip_mark']:.2f}。"
+                      "直线上不转向，前后轴的滑移差别主要来自刹车力分配。"),
+             "principle": ("刹车时滑移率越接近 1，轮胎越接近纵向抓地极限。直线重刹时前后轴受的刹车力按“刹车平衡”分配："
+                           "总是同一根轴先接近极限，说明分给它的刹车力相对它的载荷偏多。理想状态是两根轴差不多同时到极限，"
+                           "这样总的减速度最大。比抱死更早就能看出来。")}
+    return _finding(f"brake_bias_{axle}", "brakes", "warn", f"刹车平衡偏{'前' if axle == 'front' else '后'}（直线重刹时{axle_cn}先饱和）",
+                    summary, evidence, [z["loc"] for z in hit], basis, tips, conf, caveat,
+                    data={"bias": axle, "zones": len(ev), "biased_zones": k, "abs_on": ctx.abs_on})
+
+
+# ================================================================ ⑤c 刹车压力（踏板 - 减速度饱和）
+
+def _decel_sign(glong: np.ndarray, brk: np.ndarray) -> float:
+    """g_long 的正负号：刹车时应该是减速。重刹采样的中位数为正就翻过来（不依赖游戏的正负号约定）。"""
+    m = brk >= 0.3
+    if m.sum() < 5:
+        return -1.0
+    return -1.0 if float(np.median(glong[m])) <= 0 else 1.0
+
+
+def _coast_model(spd_ms: np.ndarray, decel: np.ndarray, mask: np.ndarray, min_n: int) -> tuple[float, float] | None:
+    """滑行（不踩油门不踩刹车）时的减速度 ≈ a + b·v²（风阻 + 发动机制动 + 滚阻）。样本不够返回 None。"""
+    if mask.sum() < max(10, min_n):
+        return None
+    v2 = spd_ms[mask] ** 2
+    A = np.stack([np.ones_like(v2), v2], axis=1)
+    try:
+        (a, b), *_ = np.linalg.lstsq(A, decel[mask], rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    return float(a), float(b)
+
+
+def _speed_edges(speed: np.ndarray, quantiles, fixed) -> list[float]:
+    """车速分档边界（km/h）：配置里写了固定边界就用固定的，否则按这些采样车速的分位数分，去掉重复。"""
+    if fixed:
+        return sorted(float(x) for x in fixed)
+    if speed.size == 0:
+        return []
+    edges = [round(float(np.quantile(speed, q))) for q in quantiles]
+    out: list[float] = []
+    for e in edges:
+        if not out or e - out[-1] >= 5:
+            out.append(float(e))
+    return out
+
+
+def _band_defs(edges: list[float]) -> list[dict]:
+    names = {1: ["全部"], 2: ["低速", "高速"], 3: ["低速", "中速", "高速"]}.get(len(edges) + 1)
+    out = []
+    for i in range(len(edges) + 1):
+        lo = edges[i - 1] if i > 0 else None
+        hi = edges[i] if i < len(edges) else None
+        rng = (f"< {hi:.0f} km/h" if lo is None else f"> {lo:.0f} km/h" if hi is None else f"{lo:.0f}–{hi:.0f} km/h")
+        out.append({"name": names[i] if names else f"第 {i + 1} 档", "lo_kmh": lo, "hi_kmh": hi, "range": rng})
+    return out
+
+
+def _band_mask(speed: np.ndarray, band: dict) -> np.ndarray:
+    m = np.ones(speed.size, bool)
+    if band["lo_kmh"] is not None:
+        m &= speed >= band["lo_kmh"]
+    if band["hi_kmh"] is not None:
+        m &= speed < band["hi_kmh"]
+    return m
+
+
+def _pedal_samples(ctx: _Ctx) -> dict | None:
+    """刹车压力分析用的采样：直线（不转向、不踩油门、没压路肩）踩刹车时的 (踏板, 扣掉滑行减速后的减速度 G, 车速)。"""
+    need = ("brake", "g_long", "speed", "steer", "throttle")
+    if not ctx.dash or ctx.missing(need):
+        return None
+    r = ctx.r["brake_pressure"]
+    brk, thr = ctx.ch("brake"), ctx.ch("throttle")
+    steer, spd = np.abs(ctx.ch("steer")), np.abs(ctx.ch("speed"))
+    decel = ctx.ch("g_long") * _decel_sign(ctx.ch("g_long"), brk)
+    base = (steer < r["max_steer"]) & (thr <= r["max_throttle"]) & (spd * 3.6 > r["min_speed_kmh"]) \
+        & ~_near_kerb(ctx, r["kerb_window_s"])
+    coast = base & (brk <= r["coast_max_pedal"])
+    model = _coast_model(spd, decel, coast, round(r["min_coast_s"] / ctx.dt))
+    m = base & (brk >= r["min_brake"])
+    net = decel - (model[0] + model[1] * spd ** 2 if model else 0.0)
+    return {"dt": ctx.dt, "pedal": brk[m], "decel_g": net[m], "speed_kmh": spd[m] * 3.6, "coast": model,
+            "coast_s": float(coast.sum() * ctx.dt)}
+
+
+def _pedal_curves(sets: list[dict], r: dict) -> dict:
+    """按车速分档算“踏板 → 减速度”曲线和饱和点（单圈 / 多圈合并共用）。"""
+    sets = [s for s in sets if s and s["pedal"].size]
+    if not sets:
+        return {"bands": [], "edges_kmh": []}
+    ped = np.concatenate([s["pedal"] for s in sets])
+    dec = np.concatenate([s["decel_g"] for s in sets])
+    spd = np.concatenate([s["speed_kmh"] for s in sets])
+    w = np.concatenate([np.full(s["pedal"].size, s["dt"]) for s in sets])
+    edges = _speed_edges(spd, r["speed_band_quantiles"], r["speed_band_edges_kmh"])
+    bands = []
+    for band in _band_defs(edges):
+        bm = _band_mask(spd, band)
+        k = np.floor(ped[bm] / r["pedal_bin"] + 1e-9).astype(int)
+        bins = []
+        for b in sorted(set(k.tolist())):
+            q = k == b
+            t_s = float(w[bm][q].sum())
+            if t_s < r["min_bin_s"]:
+                continue
+            bins.append({"pedal": round(min(1.0, (b + 0.5) * r["pedal_bin"]), 3), "decel_g": float(np.median(dec[bm][q])),
+                         "time_s": round(t_s, 2)})
+        info = {**band, "bins": bins, "time_s": round(float(w[bm].sum()), 2), "sat_pedal": None, "sat_decel_g": None,
+                "status": "insufficient", "max_pedal": max((x["pedal"] for x in bins), default=None)}
+        span = (bins[-1]["pedal"] - bins[0]["pedal"]) if bins else 0.0
+        if len(bins) >= r["min_bins"] and span >= r["min_span"] - 1e-9:
+            top = max(x["decel_g"] for x in bins)
+            s_idx = None
+            for i, x in enumerate(bins):
+                if top > 0 and all(y["decel_g"] >= r["sat_frac"] * top for y in bins[i:]):
+                    s_idx = i
+                    break
+            above = len(bins) - 1 - s_idx if s_idx is not None else 0
+            if s_idx is not None and above >= r["min_bins_above"] and bins[-1]["pedal"] >= r["full_pedal"]:
+                info.update(sat_pedal=bins[s_idx]["pedal"], sat_decel_g=round(bins[s_idx]["decel_g"], 3),
+                            status="saturated" if bins[s_idx]["pedal"] <= r["sat_warn_pedal"] else "late")
+            else:
+                info["status"] = "linear"
+        bands.append(info)
+    return {"bands": bands, "edges_kmh": edges}
+
+
+def _check_brake_pressure(ctx: _Ctx) -> None:
+    cid, name = "brake_pressure", CHECK_NAME["brake_pressure"]
+    r = ctx.r["brake_pressure"]
+    ps = _pedal_samples(ctx)
+    if ps is None:
+        ctx.check(cid, name, "skipped", "数据不足：需要刹车、纵向 G、车速、方向盘、油门。")
+        return
+    ctx.samples["brake_pedal"] = ps
+    curves = _pedal_curves([ps], r)
+    coast_txt = ("已扣掉风阻和发动机制动（按滑行段拟合 减速度 = a + b·车速²）" if ps["coast"] else
+                 f"滑行数据不足 {r['min_coast_s']:.0f} s，没扣风阻和发动机制动（高速段的减速度会偏大）")
+    evaluated = [b for b in curves["bands"] if b["status"] != "insufficient"]
+    if not evaluated:
+        ctx.check(cid, name, "skipped",
+                  f"数据不足：直线刹车时踏板位置太集中（每个车速档至少要 {r['min_bins']} 个 {_pct(r['pedal_bin'])} 宽的踏板区间、"
+                  f"每个区间 ≥ {r['min_bin_s']:.2f} s、跨度 ≥ {_pct(r['min_span'])}）——比如总是一脚踩到底，就看不出饱和点。")
+        return
+    sat = [b for b in evaluated if b["status"] == "saturated"]
+    parts = []
+    for b in curves["bands"]:
+        if b["status"] == "insufficient":
+            parts.append(f"{b['name']}（{b['range']}）数据不足")
+        elif b["sat_pedal"] is not None:
+            parts.append(f"{b['name']}（{b['range']}）踩到 {_pct(b['sat_pedal'])} 后减速度不再增加（约 {b['sat_decel_g']:.2f} G）")
+        else:
+            parts.append(f"{b['name']}（{b['range']}）踩到 {_pct(b['max_pedal'])} 减速度还在增加")
+    note = "；".join(parts) + f"（{coast_txt}）"
+    if not sat:
+        ctx.check(cid, name, "ok", note + f"。没有在 {_pct(r['sat_warn_pedal'])} 踏板以内就饱和的。")
+        return
+    ctx.findings.append(_brake_pressure_finding(ctx, sat, curves, coast_txt))
+    ctx.check(cid, name, "found", note + "。")
+
+
+def _brake_pressure_finding(ctx: _Ctx, sat: list[dict], curves: dict, coast_txt: str) -> dict:
+    r = ctx.r["brake_pressure"]
+    worst = min(sat, key=lambda b: b["sat_pedal"])
+    evidence = []
+    for b in curves["bands"]:
+        if not b["bins"]:
+            continue
+        pts = "、".join(f"{_pct(x['pedal'])}→{x['decel_g']:.2f} G" for x in b["bins"])
+        evidence.append(f"{b['name']}（{b['range']}，直线刹车 {b['time_s']:.1f} s）：踏板→减速度 {pts}")
+        if b["sat_pedal"] is not None:
+            evidence.append(f"　{b['name']}：踩到约 {_pct(b['sat_pedal'])} 时减速度已达到这档最大值的 ≥ {_pct(r['sat_frac'])}，"
+                            "再往下踩减速度基本不变")
+    evidence.append(coast_txt)
+    evidence.append(f"判定阈值：直线（|方向盘| < {_pct(r['max_steer'])}、油门 ≤ {_pct(r['max_throttle'])}、车速 > {r['min_speed_kmh']:.0f} km/h、"
+                    f"没压路肩）刹车时，按 {_pct(r['pedal_bin'])} 踏板分区间取减速度中位数（每区间 ≥ {r['min_bin_s']:.2f} s）；"
+                    f"从某个踏板位置起后面所有区间都 ≥ 最大值的 {_pct(r['sat_frac'])}、后面还有 ≥ {r['min_bins_above']} 个区间、"
+                    f"最深踩到 ≥ {_pct(r['full_pedal'])}，这个位置 ≤ {_pct(r['sat_warn_pedal'])} 才报")
+    if ctx.abs_on is True:
+        sev = "info"
+        title = f"刹车踩到约 {_pct(worst['sat_pedal'])} ABS 就开始限制减速度"
+        summary = (f"{worst['name']}段踩到约 {_pct(worst['sat_pedal'])} 后减速度就不再增加（约 {worst['sat_decel_g']:.2f} G）。"
+                   "你开着 ABS，多半是 ABS 在这里开始介入：后面那截踏板只是让 ABS 更忙，不会刹得更快。")
+        tips = ["想要更细的刹车控制：刹车压力调小一点，让踩到 90~100% 时才接近极限",
+                "不想动调校的话：重刹时踩到这个位置附近就够了，不必一脚踩死"]
+    else:
+        sev = "warn"
+        title = f"刹车压力偏大（踩到约 {_pct(worst['sat_pedal'])} 减速度就到头）"
+        summary = (f"{worst['name']}段踩到约 {_pct(worst['sat_pedal'])} 后减速度就不再增加（约 {worst['sat_decel_g']:.2f} G）："
+                   "后面那截踏板行程是浪费的，而且再往下踩只会更容易抱死。")
+        tips = ["刹车压力调小一点（让踩到 90~100% 时才到极限，刹车控制更细）",
+                "如果同时有“刹车抱死”，这条更值得先改"]
+    bands = [b["name"] for b in sat]
+    caveat = ("减速度受车速和下压力影响很大（高速时下压力大、减速度也大），所以按车速分档分别看；"
+              "手柄扳机和方向盘踏板的行程感觉不一样，以实际踩到的百分比为准。" +
+              (" " + _abs_caveat(ctx.abs_on, "饱和点") if ctx.abs_on is None else "") + " " + ONE_AT_A_TIME)
+    basis = {"channels": ["brake（踏板 0~1）", "g_long（纵向 G，自动判断正负号）", "speed", "steer", "throttle", "rumble_*"],
+             "rule": (f"只用直线刹车的采样，按车速分档（默认按本圈刹车时车速的中位数分成低速 / 高速，可在 tuning_rules.toml 改成固定边界），"
+                      f"每档把踏板按 {_pct(r['pedal_bin'])} 分区间，取扣掉滑行减速后的减速度中位数，找减速度不再增加的踏板位置。"),
+             "principle": ("轮胎能提供的最大减速度是有限的：踏板踩到某个位置时轮胎已经到了纵向极限，再踩只会让轮子更接近抱死，"
+                           "减速度不会再增加。这个位置太浅说明刹车压力设得太大，可用的踏板行程很短、很难精细控制。")}
+    first_zone = next((z["location"] for z in ctx.samples.get("brake_zones", []) if z["location"]), None)
+    locs = [first_zone | {"phase": None, "phase_label": "全圈", "corner": None,
+                          "label": "全圈直线刹车段（统计）"}] if first_zone else []
+    return _finding("brake_pressure_high", "brakes", sev, title, summary, evidence, locs, basis, tips,
+                    "medium" if len(bands) >= 2 or worst["sat_pedal"] <= r["sat_warn_pedal"] - 0.2 else "low",
+                    caveat, data={"sat_pedal": worst["sat_pedal"], "bands": bands, "abs_on": ctx.abs_on})
+
+
+# ================================================================ ⑤d 差速器（入弯松刹的内侧轮 / 四驱前后分配）
+
+def _check_differential(ctx: _Ctx) -> None:
+    cid, name = "differential", CHECK_NAME["differential"]
+    need = [f"slip_ratio_{w}" for w in WHEELS] + ["throttle", "brake", "g_lat"]
+    if not ctx.dash or ctx.missing(need):
+        ctx.check(cid, name, "skipped", "数据不足：需要滑移率、油门、刹车、横向 G。")
+        return
+    dt_code = ctx.meta.get("drivetrain")
+    if dt_code not in DRIVEN_WHEELS:
+        ctx.check(cid, name, "skipped", "数据不足：不知道驱动方式（meta 里没有 drivetrain），分不出该看哪个差速器。")
+        return
+    r = ctx.r["differential"]
+    g = ctx.r["general"]
+    notes = []
+    found = evaluated = False
+    thr, brk, glat = ctx.ch("throttle"), ctx.ch("brake"), np.abs(ctx.ch("g_lat"))
+    sr = {w: np.abs(ctx.ch(f"slip_ratio_{w}")) for w in WHEELS}
+    axles = [ax for ax in ("front", "rear") if all(w in DRIVEN_WHEELS[dt_code] for w in AXLE_WHEELS[ax])]
+
+    # (a) 入弯松刹：弯心前、不踩油门也不踩刹车、在转弯 → 发动机制动经差速器作用在驱动轮上
+    if ctx.corners:
+        lift = (thr <= r["lift_max_throttle"]) & (brk <= r["lift_max_brake"]) & (glat >= r["min_lat_g"]) & ctx.speed_ok
+        inner_m = {ax: np.zeros(ctx.n, bool) for ax in axles}
+        both_m = {ax: np.zeros(ctx.n, bool) for ax in axles}
+        lift_entry = np.zeros(ctx.n, bool)
+        owner = np.full(ctx.n, -1)
+        for c in ctx.corners:
+            lo = min(c["brake_start_m"] if c.get("brake_start_m") is not None else c["start_m"], c["start_m"])
+            seg = lift & (ctx.dist >= lo) & (ctx.dist < c["apex_m"]) & (owner == -1)
+            owner[seg] = c["index"]
+            lift_entry |= seg
+            inner = _inner_wheels(c)
+            for ax in axles:
+                iw = next(w for w in AXLE_WHEELS[ax] if w in inner)
+                ow = next(w for w in AXLE_WHEELS[ax] if w not in inner)
+                i_s, o_s = sr[iw] > r["slip_limit"], sr[ow] > r["slip_limit"]
+                inner_m[ax] |= seg & i_s & ~o_s
+                both_m[ax] |= seg & i_s & o_s
+        lift_s = float(lift_entry.sum() * ctx.dt)
+        if lift_s < r["min_lift_s"]:
+            notes.append(f"入弯松刹（油门 ≤ {_pct(r['lift_max_throttle'])}、刹车 ≤ {_pct(r['lift_max_brake'])}、横向 G ≥ {r['min_lat_g']:.2f}）"
+                         f"只有 {lift_s:.1f} s，不判断减速锁止")
+        else:
+            evaluated = True
+            events = []
+            for ax in axles:
+                for kind, mm in (("inner", inner_m[ax]), ("both", both_m[ax])):
+                    for i0, i1 in _runs(mm, ctx.t, g["merge_gap_s"], ctx.dt):
+                        if ctx.dur(i0, i1) < r["min_duration_s"]:
+                            continue
+                        c = ctx.corners[int(np.bincount(owner[i0:i1 + 1][owner[i0:i1 + 1] >= 0]).argmax())]
+                        inner = _inner_wheels(c)
+                        wheels = [w for w in AXLE_WHEELS[ax] if kind == "both" or w in inner]
+                        events.append({"i0": i0, "i1": i1, "axle": ax, "kind": kind, "corner": c, "wheels": wheels,
+                                       "peak": max(float(sr[w][i0:i1 + 1].max()) for w in wheels),
+                                       "other": float(np.mean([sr[w][i0:i1 + 1].mean() for w in AXLE_WHEELS[ax] if w not in wheels]))
+                                       if kind == "inner" else None})
+            mx = max(float(sr[w][lift_entry].max()) for ax in axles for w in AXLE_WHEELS[ax]) if lift_entry.any() else 0.0
+            if events:
+                found = True
+                ctx.findings.append(_diff_decel_finding(ctx, sorted(events, key=lambda e: e["i0"]), lift_s))
+                notes.append(f"入弯松刹 {lift_s:.1f} s 里驱动轮滑移超限 {len(events)} 次")
+            else:
+                notes.append(f"入弯松刹 {lift_s:.1f} s，驱动轮 |滑移率| 最大 {mx:.2f}，没超过 {r['slip_limit']:.2f}")
+    else:
+        notes.append("没识别出弯道，不判断入弯松刹时的内侧轮")
+
+    # (b) 四驱：给油接近抓地极限时前后轴谁滑得多 → 中央差速器分配
+    if dt_code == 2:
+        rt = ctx.r["traction"]
+        f_sr = (sr["fl"] + sr["fr"]) / 2
+        r_sr = (sr["rl"] + sr["rr"]) / 2
+        power = (thr >= rt["min_throttle"]) & (brk < rt["max_brake"]) & ctx.speed_ok
+        near = power & (np.maximum(f_sr, r_sr) >= r["awd_min_slip"])
+        near_s = float(near.sum() * ctx.dt)
+        if near_s < r["awd_min_s"] - 1e-6:
+            notes.append(f"四驱：给油时接近抓地极限（某一轴 |滑移率| ≥ {r['awd_min_slip']:.2f}）只有 {near_s:.1f} s，不判断中央差速器")
+        else:
+            evaluated = True
+            fm, rm = float(f_sr[near].mean()), float(r_sr[near].mean())
+            ratio = rm / max(fm, 1e-3)
+            if ratio >= r["awd_ratio"] or ratio <= 1 / r["awd_ratio"]:
+                found = True
+                ctx.findings.append(_awd_finding(ctx, near, fm, rm, near_s))
+                notes.append(f"四驱：给油接近极限的 {near_s:.1f} s 里后轴 / 前轴平均滑移比 {ratio:.2f}")
+            else:
+                notes.append(f"四驱：给油接近极限的 {near_s:.1f} s 里前轴平均 |滑移率| {fm:.2f}、后轴 {rm:.2f}，前后分配合理")
+    if not evaluated:
+        ctx.check(cid, name, "skipped", "数据不足：" + "；".join(notes) + "。")
+        return
+    ctx.check(cid, name, "found" if found else "ok", "；".join(notes) + "。出弯空转分内侧 / 外侧轮的判断见“驱动轮空转”。")
+
+
+def _diff_decel_finding(ctx: _Ctx, events: list[dict], lift_s: float) -> dict:
+    r = ctx.r["differential"]
+    inner = [e for e in events if e["kind"] == "inner"]
+    corners = sorted({e["corner"]["name"] for e in events}, key=_corner_key)
+    evidence = []
+    for e in events:
+        loc = ctx.loc(e["i0"], e["i1"], wheel=_wheel_code(e["wheels"]), corner=e["corner"], phase="entry")
+        e["loc"] = loc
+        turn = "右弯" if e["corner"]["direction"] == "right" else "左弯"
+        if e["kind"] == "inner":
+            evidence.append(f"{loc['label']}（{turn}，持续 {ctx.dur(e['i0'], e['i1']):.2f} s）：松刹车滑行入弯时内侧的"
+                            f"{_wheel_cn(e['wheels'][0])} |滑移率| 最大 {e['peak']:.2f}，同轴外侧轮平均只有 {e['other']:.2f}")
+        else:
+            evidence.append(f"{loc['label']}（{turn}，持续 {ctx.dur(e['i0'], e['i1']):.2f} s）：松刹车滑行入弯时"
+                            f"{AXLE_CN[e['axle']]}两个驱动轮 |滑移率| 都超过 {r['slip_limit']:.2f}（最大 {e['peak']:.2f}）")
+    evidence.append(f"判定阈值：弯心前、油门 ≤ {_pct(r['lift_max_throttle'])}、刹车 ≤ {_pct(r['lift_max_brake'])}、横向 G ≥ {r['min_lat_g']:.2f}"
+                    f"（本圈共 {lift_s:.1f} s）时，驱动轮 |滑移率| > {r['slip_limit']:.2f} 连续 ≥ {r['min_duration_s']:.2f} s；"
+                    f"出现在 ≥ {r['alert_corners']} 个弯记为严重")
+    if inner:
+        sev = "alert" if len(corners) >= r["alert_corners"] else "warn"
+        title = f"入弯松刹时内侧驱动轮被拖滑（{'、'.join(ctx.cn(c) for c in corners)}）"
+        summary = ("松刹车滑行入弯时，发动机制动集中到了载荷小的内侧驱动轮上，内侧轮先滑：差速器减速锁止偏低。"
+                   "这会让入弯时车尾不稳（后驱）或者车头不听话（前驱）。")
+        tips = ["差速器减速锁止率调高一点（松油时左右轮被约束得更紧，发动机制动更多给外侧重载轮）",
+                "先排除驾驶：降挡别太早太快，降挡时补油（跟趾）"]
+    else:
+        sev = "info"
+        title = f"入弯松刹时驱动轴两轮一起滑（{'、'.join(ctx.cn(c) for c in corners)}）"
+        summary = "松刹车滑行入弯时同一根驱动轴两个轮子都滑：发动机制动整体太大，和差速器左右分配关系不大。"
+        tips = ["先排除驾驶：降挡别太早、别一次降好几挡", "差速器减速锁止率调低一点也能让车尾更容易跟着转，但解决不了发动机制动太大"]
+    basis = {"channels": ["slip_ratio_*（归一化滑移率）", "throttle", "brake", "g_lat", "弯道方向（corners.direction，来自方向盘）",
+                          "meta.drivetrain（驱动轮）"],
+             "rule": "按弯道方向分出内侧 / 外侧驱动轮（右弯内侧 = 右侧轮），只看弯心前的松刹车滑行段。",
+             "principle": ("松油时发动机制动通过差速器分给左右驱动轮。差速器越“开放”，两边分到的制动力越接近，"
+                           "过弯时内侧轮载荷小，先被拖到极限；减速锁止率越高，左右轮被约束得越紧，内侧轮越不容易单独滑。"
+                           "两个轮子一起滑则说明发动机制动本身太大。")}
+    return _finding("diff_decel", "differential", sev, title, summary, evidence, [e["loc"] for e in events], basis, tips,
+                    "medium" if len(events) >= 2 else "low", ONE_AT_A_TIME,
+                    data={"events": len(events), "inner_events": len(inner), "corners": corners})
+
+
+def _awd_finding(ctx: _Ctx, near: np.ndarray, fm: float, rm: float, near_s: float) -> dict:
+    r = ctx.r["differential"]
+    rear_heavy = rm > fm
+    hi, lo = ("后轴", "前轴") if rear_heavy else ("前轴", "后轴")
+    runs = [(a, b) for a, b in _runs(near, ctx.t, ctx.r["general"]["merge_gap_s"], ctx.dt)]
+    runs.sort(key=lambda x: x[1] - x[0], reverse=True)
+    locs = [ctx.loc(a, b, wheel="rear" if rear_heavy else "front") for a, b in runs[:5]]
+    evidence = [f"给油（油门 ≥ {_pct(ctx.r['traction']['min_throttle'])}）且某一轴 |滑移率| ≥ {r['awd_min_slip']:.2f} 的 {near_s:.1f} s 里："
+                f"前轴平均 |滑移率| {fm:.2f}、后轴 {rm:.2f}，{hi}是{lo}的 {max(fm, rm) / max(min(fm, rm), 1e-3):.1f} 倍"]
+    evidence += [f"　{l['label']}" for l in locs]
+    evidence.append(f"判定阈值：两轴平均滑移比 ≥ {r['awd_ratio']:.1f} 倍（或 ≤ 1/{r['awd_ratio']:.1f}），接近极限的数据 ≥ {r['awd_min_s']:.1f} s")
+    tips = ([f"中央差速器扭矩分配往前挪一点（前轴多分一点，后轴少滑）"] if rear_heavy else
+            ["中央差速器扭矩分配往后挪一点（后轴多分一点，前轴少滑、出弯少推头）"])
+    tips.append("先排除驾驶：出弯给油更柔")
+    sev = "warn" if any(f["id"] == "wheelspin" for f in ctx.findings) else "info"
+    basis = {"channels": ["slip_ratio_*（前后轴各取左右两轮 |x| 的平均）", "throttle", "brake", "meta.drivetrain = 四驱"],
+             "rule": "只看四驱车给油、接近抓地极限的时刻，比较前后轴的平均滑移。",
+             "principle": ("四驱车的中央差速器决定扭矩怎么分给前后轴。分给某一轴太多，它会先到纵向极限开始空转，"
+                           "另一轴的抓地却没用上；往另一轴挪一点分配，两轴能更均匀地出力。")}
+    return _finding(f"awd_center_{'rear' if rear_heavy else 'front'}", "differential", sev,
+                    f"四驱{hi}滑得多（中央差速器分配偏{'后' if rear_heavy else '前'}）",
+                    f"给油接近极限时{hi}的滑移明显比{lo}大：中央差速器给{hi}的扭矩偏多。", evidence, locs, basis, tips,
+                    "medium" if near_s >= 4 * r["awd_min_s"] else "low", ONE_AT_A_TIME,
+                    data={"front_mean": round(fm, 3), "rear_mean": round(rm, 3), "near_limit_s": round(near_s, 2)})
 
 
 # ================================================================ ⑥ 齿比
@@ -1160,6 +1807,444 @@ def _check_gearing(ctx: _Ctx) -> None:
                                      f"没有持续撞断油（≥ {_pct(r['limiter_frac'])} 连续 ≥ {r['min_duration_s']:.1f} s）。")
 
 
+# ================================================================ 分析块 ①：平衡指数 B 的分布（车速分档 + 弯 × 阶段热力表）
+
+def _fb(x: float) -> str:
+    """B 值的显示：带正负号两位小数，四舍五入是 0 的不带正负号。"""
+    return "0.00" if abs(x) < 0.005 else f"{x:+.2f}"
+
+
+def _tendency(b: float | None, thr: float) -> str | None:
+    if b is None:
+        return None
+    return "understeer" if b >= thr else "oversteer" if b <= -thr else "neutral"
+
+
+_TEND_CN = {"understeer": "推头", "oversteer": "甩尾", "neutral": "中性", None: "样本不足"}
+
+
+def _aero_line(kind: str, aero: bool | None) -> str:
+    """“只在高速段推头 / 甩尾”的解读：有没有可调空力，说法完全不一样。"""
+    if kind == "understeer":
+        if aero is True:
+            return "这车有可调空力：高速推头多半看前后下压力的比例，前翼加一点 / 后翼减一点。"
+        if aero is False:
+            return ("这车没有可调空力，所以不是空力能调的：高速推头多半是高速弯入弯速度太快，或者弹簧 / 防倾杆让前轴在大载荷下先饱和，"
+                    "可以试前防倾杆软一点 / 后防倾杆硬一点，并检查高速时前轴有没有触底。")
+        return ("如果这车装了可调空力件（前后翼），高速推头多半看前后下压力比例（前翼加一点 / 后翼减一点）；没装的话就不是空力问题，"
+                "看机械平衡（防倾杆、弹簧）和入弯速度。在上面“可调空力”里选一下，结论会更具体。")
+    if aero is True:
+        return "这车有可调空力：高速甩尾多半是后下压力不够，后翼加一点 / 前翼减一点。"
+    if aero is False:
+        return ("这车没有可调空力：高速甩尾多半是后轴机械抓地不够（后防倾杆软一点 / 后弹簧软一点），"
+                "或者高速弯里收油 / 带刹车让车尾变轻。")
+    return ("如果这车装了可调空力件，高速甩尾多半是后下压力不够（后翼加一点）；没装的话看后轴机械抓地（后防倾杆 / 后弹簧软一点）"
+            "和高速弯里有没有突然收油。")
+
+
+def _balance_block(sets: list[dict], rules: dict, aero: bool | None) -> dict:
+    """平衡指数 B = 前轴平均 |侧偏角| − 后轴平均 |侧偏角|（> 0 推头，< 0 甩尾）。多圈时把各圈的采样拼起来算。"""
+    r, rb = rules["balance_map"], rules["balance"]
+    sets = [s for s in sets if s and s["b"].size]
+    method = (f"B = 前轴（左右两轮）平均 |侧偏角| − 后轴平均 |侧偏角|，B > 0 前轴更接近极限（推头），B < 0 后轴更接近极限（甩尾）。"
+              f"只用在转弯的采样（横向 G ≥ {rb['min_lat_g']:.2f}）；每档平均 |B| ≥ {r['tendency_b']:.2f}，"
+              f"或者这档里 |B| ≥ {rb['axle_diff']:.2f} 的时间占 ≥ {_pct(r['tendency_share'])}（且是另一方向的 2 倍以上）算偏推头 / 偏甩尾；"
+              + ("车速分档按 tuning_rules.toml 里的固定边界。" if r["speed_band_edges_kmh"] else
+                 f"车速分档按这些采样车速的 {'/'.join(f'{q * 100:.0f}%' for q in r['speed_band_quantiles'])} 分位数切（按这台车自己的车速，不写死）。"))
+    if not sets:
+        return {"available": False, "why": "数据不足：需要侧偏角、横向 G、车速、方向盘等通道，且这圈要有转弯的数据。",
+                "method": method}
+    w = np.concatenate([np.full(s["b"].size, s["dt"]) for s in sets])
+    spd = np.concatenate([s["speed_kmh"] for s in sets])
+    b = np.concatenate([s["b"] for s in sets])
+    fa = np.concatenate([s["fa"] for s in sets])
+    ra = np.concatenate([s["ra"] for s in sets])
+    edges = _speed_edges(spd, r["speed_band_quantiles"], r["speed_band_edges_kmh"])
+    bands = []
+    for band in _band_defs(edges):
+        m = _band_mask(spd, band)
+        t_s = float(w[m].sum())
+        ok = t_s >= r["min_band_s"]
+        mean = float(np.average(b[m], weights=w[m])) if m.any() else None
+        us = float(w[m & (b >= rb["axle_diff"])].sum() / t_s) if t_s > 0 else 0.0
+        os_ = float(w[m & (b <= -rb["axle_diff"])].sum() / t_s) if t_s > 0 else 0.0
+        tend = None
+        if ok:
+            tend = _tendency(mean, r["tendency_b"])
+            if tend == "neutral" and max(us, os_) >= r["tendency_share"] and max(us, os_) >= 2 * min(us, os_):
+                tend = "understeer" if us > os_ else "oversteer"
+        bands.append({**band, "time_s": round(t_s, 2), "ok": ok, "b": mean if ok else None, "b_raw": mean,
+                      "us_share": us, "os_share": os_,
+                      "front": float(np.average(fa[m], weights=w[m])) if m.any() else None,
+                      "rear": float(np.average(ra[m], weights=w[m])) if m.any() else None,
+                      "speed_kmh": float(np.average(spd[m], weights=w[m])) if m.any() else None,
+                      "tendency": tend})
+    # 热力表：按弯道编号对齐（多圈时同一个编号合并；有固定弯道表时编号在各圈里是同一个弯）
+    corner_info: dict[str, dict] = {}
+    for s in sets:
+        for c in s["corners"]:
+            corner_info.setdefault(c["code"], c)
+    rows = []
+    cell_sets = [s for s in sets if s["cells"] is not None]
+    if cell_sets:
+        code = np.concatenate([s["cells"]["code"] for s in cell_sets])
+        ph = np.concatenate([s["cells"]["phase"] for s in cell_sets])
+        cb = np.concatenate([s["cells"]["b"] for s in cell_sets])
+        cs = np.concatenate([s["cells"]["speed_kmh"] for s in cell_sets])
+        cw = np.concatenate([np.full(s["cells"]["b"].size, s["dt"]) for s in cell_sets])
+        for k in sorted(corner_info, key=_corner_key):
+            info = corner_info[k]
+            cells = []
+            for p, pname in enumerate(PHASES):
+                m = (code == k) & (ph == p)
+                t_s = float(cw[m].sum())
+                ok = t_s >= rb["min_phase_s"]
+                mean = float(np.average(cb[m], weights=cw[m])) if m.any() else None
+                cells.append({"phase": pname, "phase_label": PHASE_CN[pname], "time_s": round(t_s, 2), "ok": ok,
+                              "b": mean if ok else None,
+                              "speed_kmh": float(np.average(cs[m], weights=cw[m])) if m.any() else None,
+                              "tendency": _tendency(mean, r["tendency_b"]) if ok else None,
+                              "level": min(1.0, abs(mean) / r["color_full_b"]) if ok and mean is not None else None})
+            rows.append({"code": k, "label": info.get("label") or k, "direction": info.get("direction"), "cells": cells})
+    # 最明显的几格
+    flat = [(row, c) for row in rows for c in row["cells"] if c["ok"] and c["tendency"] in ("understeer", "oversteer")]
+    flat.sort(key=lambda x: -abs(x[1]["b"]))
+    top = [{"code": row["code"], "label": row["label"], "phase": c["phase"], "phase_label": c["phase_label"], "b": c["b"],
+            "tendency": c["tendency"], "speed_kmh": c["speed_kmh"]} for row, c in flat[:int(r["top_cells"])]]
+    notes = _balance_reading(bands, top, r, aero)
+    sources = {s["corner_source"] for s in sets}
+    align_note = None
+    if len(sets) > 1 and "layout" not in sources:
+        align_note = "各圈的弯道是各自识别的，编号可能对不上（同一个编号未必是同一个弯）；赛道有了固定弯道表后会按表对齐。"
+    elif len(sets) > 1 and len(sources) > 1:
+        align_note = "有的圈用了固定弯道表、有的圈是自己识别的弯道（圈长和表差太多），这些圈的弯道编号可能对不上。"
+    return {"available": True, "method": method, "edges_kmh": edges, "bands": bands, "rows": rows,
+            "phases": [{"phase": p, "label": PHASE_CN[p]} for p in PHASES], "top_cells": top, "notes": notes,
+            "tendency_b": r["tendency_b"], "color_full_b": r["color_full_b"], "min_band_s": r["min_band_s"],
+            "min_cell_s": rb["min_phase_s"], "aero": aero, "laps": len(sets), "corner_source": sorted(sources),
+            "align_note": align_note,
+            "legend": "蓝 = 推头（B > 0，前轴先到极限），红 = 甩尾（B < 0，后轴先到极限），灰 = 这一格样本太少不评价"}
+
+
+def _balance_reading(bands: list[dict], top: list[dict], r: dict, aero: bool | None) -> list[str]:
+    ok = [b for b in bands if b["ok"]]
+    out: list[str] = []
+    if len(ok) < 2:
+        out.append(f"车速分档的数据不够（每档至少 {r['min_band_s']:.1f} s 转弯数据），先看下面的热力表。")
+    else:
+        lo, hi = ok[0], ok[-1]
+        tend = [b["tendency"] for b in ok]
+        def _band_txt(b: dict) -> str:
+            extra = "".join(f"，{_pct(x)} 的时间明显{w}" for x, w in ((b["us_share"], "推头"), (b["os_share"], "甩尾")) if x >= 0.05)
+            return f"{b['name']}（{b['range']}）B {_fb(b['b'])}{extra} → {_TEND_CN[b['tendency']]}"
+        desc = "；".join(_band_txt(b) for b in ok)
+        out.append(f"按车速分档：{desc}。")
+        for kind, word in (("understeer", "推头"), ("oversteer", "甩尾")):
+            if all(t == kind for t in tend):
+                out.append(f"各个车速段平均都偏{word}：整体平衡偏{word}，和车速关系不大，先看机械平衡"
+                           f"（{'前防倾杆软一点 / 后防倾杆硬一点' if kind == 'understeer' else '后防倾杆软一点 / 前防倾杆硬一点'}、弹簧、差速器）。")
+                break
+            if hi["tendency"] == kind and lo["tendency"] != kind:
+                out.append(f"只在高速段{word}，低速段不{word}：" + _aero_line(kind, aero))
+                break
+            if lo["tendency"] == kind and hi["tendency"] != kind:
+                out.append(f"只在低速段{word}：低速弯里空力作用很小，多半是机械抓地——"
+                           + ("前防倾杆软一点 / 后防倾杆硬一点，出弯推头时再看差速器加速锁止。" if kind == "understeer" else
+                              "后防倾杆软一点、出弯给油柔一点，出弯甩尾时再看差速器加速锁止。"))
+                break
+        else:
+            if all(t == "neutral" for t in tend):
+                out.append(f"各个车速段平均都接近中性（|B| < {r['tendency_b']:.2f}）：整体平衡没有明显偏向，问题多半在个别弯，看下面的热力表。")
+    if top:
+        out.append("最明显的格子：" + "、".join(f"{c['label']} {c['phase_label']} B = {_fb(c['b'])}（{_TEND_CN[c['tendency']]}）" for c in top) + "。")
+    out.append("B 是平均值，只说明哪根轴更接近极限；是否真的过了极限、该不该改，看上面的“转向平衡”诊断。")
+    return out
+
+
+# ================================================================ 分析块 ②：刹车（直线重刹前后轴对比 + 踏板-减速度曲线）
+
+def _brake_block(zone_sets: list[list[dict]], pedal_sets: list[dict], rules: dict, abs_on: bool | None) -> dict:
+    zones = [z for zs in zone_sets for z in (zs or [])]
+    curves = _pedal_curves(pedal_sets, rules["brake_pressure"])
+    if not zones and not curves["bands"]:
+        return {"available": False, "why": "数据不足：没有直线刹车的数据（或者缺少滑移率 / 纵向 G 通道）。", "abs_on": abs_on}
+    rbb = rules["brake_balance"]
+    ev = [z for z in zones if z["bias"] is not None]
+    counts = {k: sum(1 for z in ev if z["bias"] == k) for k in ("front", "rear", "balanced")}
+    coast = [s for s in pedal_sets if s]
+    notes = []
+    if ev:
+        notes.append(f"{len(ev)} 段够重的直线重刹：前轴先饱和 {counts['front']} 段、后轴先饱和 {counts['rear']} 段、前后差不多 {counts['balanced']} 段。")
+    for b in curves["bands"]:
+        if b["status"] == "saturated":
+            notes.append(f"{b['name']}（{b['range']}）踩到约 {_pct(b['sat_pedal'])} 减速度就不再增加。")
+        elif b["status"] == "late":
+            notes.append(f"{b['name']}（{b['range']}）踩到约 {_pct(b['sat_pedal'])} 才到最大减速度，踏板行程用得比较满。")
+        elif b["status"] == "linear":
+            notes.append(f"{b['name']}（{b['range']}）踩到 {_pct(b['max_pedal'])} 减速度还在增加。")
+    if abs_on is True:
+        notes.append("你勾选了“我开了 ABS”：前后对比和饱和点的区分度会下降，饱和点更可能是 ABS 介入的位置。")
+    elif abs_on is None:
+        notes.append("Data Out 看不到 ABS 状态；开了 ABS 的话请在上面勾选“我开了 ABS”，结论会按开着 ABS 来解读。")
+    return {"available": True, "abs_on": abs_on, "slip_mark": rbb["slip_mark"], "zones": zones, "counts": counts,
+            "pedal": curves, "coast_fitted": bool(coast) and all(s["coast"] for s in coast), "notes": notes}
+
+
+# ================================================================ 分析块 ③：车身与悬挂
+
+def _deriv(a: np.ndarray, t: np.ndarray, max_gap: float) -> np.ndarray:
+    """中心差分求导（每秒）。两侧时间间隔 ≤ 0（重复时间戳）或 > max_gap（丢包）的点给 NaN，首尾也是 NaN。"""
+    out = np.full(a.size, np.nan)
+    if a.size < 3:
+        return out
+    gap = np.diff(t)
+    ok = (gap[:-1] > 0) & (gap[1:] > 0) & (gap[:-1] <= max_gap) & (gap[1:] <= max_gap)
+    den = t[2:] - t[:-2]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d = (a[2:] - a[:-2]) / den
+    out[1:-1] = np.where(ok, d, np.nan)
+    return out
+
+
+def _body_samples(ctx: _Ctx) -> dict | None:
+    """车身与悬挂的采样（剔除压路肩前后 kerb_window_s 秒、低速）。缺通道的部分就是 None。"""
+    r = ctx.r["body"]
+    if ctx.missing([f"susp_{w}" for w in WHEELS]) and ctx.missing([f"susp_m_{w}" for w in WHEELS]):
+        return None
+    kerb = _near_kerb(ctx, r["kerb_window_s"])
+    keep = ~kerb
+    if ctx.dash:
+        keep &= ctx.speed_ok
+    out: dict = {"dt": ctx.dt, "kerb_s": float(kerb.sum() * ctx.dt)}
+    out["norm"] = None if ctx.missing([f"susp_{w}" for w in WHEELS]) else {w: ctx.ch(f"susp_{w}")[keep] for w in WHEELS}
+    out["vel"] = out["roll"] = out["pitch"] = out["ref"] = None
+    out["sign_flipped"] = False
+    glat = ctx.ch("g_lat")
+    glong = ctx.ch("g_long")
+    if not ctx.missing([f"susp_m_{w}" for w in WHEELS]):
+        mm = {}
+        flipped = False
+        for w in WHEELS:
+            a = ctx.ch(f"susp_m_{w}") * 1000.0
+            nrm = ctx.ch(f"susp_{w}")
+            # susp_m 的方向用归一化行程（0 = 伸到最长，1 = 压到底）校正：负相关就翻过来，保证“变大 = 压缩”
+            if nrm is not None and np.std(a) > 0 and np.std(nrm) > 0 and np.corrcoef(a, nrm)[0, 1] < 0:
+                a = -a
+                flipped = True
+            mm[w] = a
+        out["sign_flipped"] = flipped
+        # 悬挂速度：中心差分；两边采样间隔超过 max_gap_factor × 典型间隔（丢包）的点不要
+        vel = {w: _deriv(mm[w], ctx.t, r["max_gap_factor"] * ctx.dt) for w in WHEELS}
+        vk = keep & np.isfinite(vel["fl"])
+        if vk.any():
+            out["vel"] = {w: vel[w][vk] for w in WHEELS}
+        # 侧倾：稳态弯（|横向 G| 够大、变化慢）里每根轴左右行程差 vs 横向 G（带正负号拟合斜率，取绝对值；
+        # 再加上直线上横向 G 很小的采样定截距，扣掉静态的左右不对称）
+        if glat is not None:
+            sel = _roll_mask(ctx, glat, keep, r)
+            if sel is not None:
+                out["roll"] = {"g": glat[sel], "front": (mm["fl"] - mm["fr"])[sel], "rear": (mm["rl"] - mm["rr"])[sel],
+                               "steady": (np.abs(glat) >= r["roll_min_lat_g"])[sel]}
+        # 点头 / 抬头：前轴平均行程 − 后轴平均行程 vs 纵向 G（刹车、加速各一个斜率，共用截距）
+        if glong is not None and glat is not None and ctx.dash:
+            pitch_mm = (mm["fl"] + mm["fr"]) / 2 - (mm["rl"] + mm["rr"]) / 2
+            out["pitch"] = _pitch_parts(ctx, pitch_mm, glong, glat, keep, r)
+    # 参考：roll / pitch 字段（世界坐标姿态角，含倾斜 / 坡度）
+    if ctx.missing(("roll", "pitch")):
+        out["ref"] = {"missing": True}
+    elif glat is not None:
+        roll_deg = np.degrees(ctx.ch("roll"))
+        pitch = ctx.ch("pitch")
+        grade_fixed = False
+        if not ctx.missing(("pos_y",)) and ctx.n > 10 and np.ptp(ctx.dist) > 50:
+            # 坡度 = 前后各 grade_smooth_m/2 米处的高度差 / 距离差（按距离取窗口，和车速无关）
+            d = np.maximum.accumulate(ctx.dist)
+            y = ctx.ch("pos_y")
+            half = r["grade_smooth_m"] / 2
+            i0 = np.clip(np.searchsorted(d, d - half, side="left"), 0, ctx.n - 1)
+            i1 = np.clip(np.searchsorted(d, d + half, side="right") - 1, 0, ctx.n - 1)
+            dd = d[i1] - d[i0]
+            grade = np.arctan(np.divide(y[i1] - y[i0], dd, out=np.zeros(ctx.n), where=dd > 1.0))
+            # pitch 和坡度的正负号约定不一定一致：按相关性定号再扣
+            if np.std(grade) > 1e-4 and np.std(pitch) > 1e-6:
+                sgn = 1.0 if np.corrcoef(pitch, grade)[0, 1] >= 0 else -1.0
+                pitch = pitch - sgn * grade
+                grade_fixed = True
+        pitch_deg = np.degrees(pitch)
+        sel = _roll_mask(ctx, glat, keep, r)
+        ref = {"missing": False, "grade_fixed": grade_fixed, "roll": None, "pitch": None}
+        if sel is not None:
+            ref["roll"] = {"g": glat[sel], "front": roll_deg[sel], "steady": (np.abs(glat) >= r["roll_min_lat_g"])[sel]}
+        if glong is not None and ctx.dash:
+            ref["pitch"] = _pitch_parts(ctx, pitch_deg, glong, glat, keep, r)
+        out["ref"] = ref
+    return out
+
+
+def _roll_mask(ctx: _Ctx, glat: np.ndarray, keep: np.ndarray, r: dict) -> np.ndarray | None:
+    """侧倾拟合用的采样：稳态弯（|横向 G| ≥ roll_min_lat_g、横向 G 变化慢）+ 横向 G 很小的直线（定截距）。"""
+    dg = np.abs(_deriv(glat, ctx.t, r["max_gap_factor"] * ctx.dt))
+    steady = keep & (np.abs(glat) >= r["roll_min_lat_g"]) & (dg <= r["steady_max_dg_s"])
+    if not steady.any():
+        return None
+    return steady | (keep & (np.abs(glat) <= 0.5 * r["pitch_max_lat_g"]) & (dg <= r["steady_max_dg_s"]))
+
+
+def _pitch_parts(ctx: _Ctx, val: np.ndarray, glong: np.ndarray, glat: np.ndarray, keep: np.ndarray, r: dict) -> dict:
+    """点头 / 抬头拟合用的直线采样：val（前后行程差或俯仰角）、刹车减速度 dec（≥ 0）、加速度 acc（≥ 0）。"""
+    sgn = _decel_sign(glong, ctx.ch("brake"))
+    decel = glong * sgn                        # 刹车 = 正
+    straight = keep & (np.abs(glat) <= r["pitch_max_lat_g"])
+    return {"v": val[straight], "dec": np.clip(decel[straight], 0, None), "acc": np.clip(-decel[straight], 0, None)}
+
+
+def _fit_roll(parts: list, key: str, dts: list[float], min_s: float) -> tuple[float | None, float]:
+    """val ≈ c + k·横向G（带正负号）。返回 (|k| 每 G, 稳态弯数据秒数)；稳态弯数据不足 min_s 秒返回 None。"""
+    use = [(p, dt) for p, dt in zip(parts, dts) if p is not None and p["g"].size]
+    t = sum(float(p["steady"].sum()) * dt for p, dt in use)
+    if not use or t < min_s:
+        return None, t
+    g = np.concatenate([p["g"] for p, _ in use])
+    v = np.concatenate([p[key] for p, _ in use])
+    A = np.stack([np.ones_like(g), g], axis=1)
+    try:
+        (_, k), *_ = np.linalg.lstsq(A, v, rcond=None)
+    except np.linalg.LinAlgError:
+        return None, t
+    return abs(float(k)), t
+
+
+def _fit_pitch(parts: list, dts: list[float], min_g: float, min_s: float) -> dict:
+    """val ≈ c + kd·刹车减速度 + ka·加速度。各斜率要有 ≥ min_s 秒、|G| ≥ min_g 的数据才给（取绝对值）。"""
+    use = [(p, dt) for p, dt in zip(parts, dts) if p is not None and p["v"].size]
+    out = {"dive": None, "dive_s": 0.0, "squat": None, "squat_s": 0.0}
+    if not use:
+        return out
+    v = np.concatenate([p["v"] for p, _ in use])
+    dec = np.concatenate([p["dec"] for p, _ in use])
+    acc = np.concatenate([p["acc"] for p, _ in use])
+    w = np.concatenate([np.full(p["v"].size, dt) for p, dt in use])
+    out["dive_s"] = float(w[dec >= min_g].sum())
+    out["squat_s"] = float(w[acc >= min_g].sum())
+    cols = [np.ones_like(v)]
+    names = []
+    for nm, x in (("dive", dec), ("squat", acc)):
+        if out[f"{nm}_s"] >= min_s:
+            cols.append(x)
+            names.append(nm)
+    if not names:
+        return out
+    try:
+        coef, *_ = np.linalg.lstsq(np.stack(cols, axis=1), v, rcond=None)
+    except np.linalg.LinAlgError:
+        return out
+    for nm, k in zip(names, coef[1:]):
+        out[nm] = abs(float(k))
+    return out
+
+
+def _body_block(sets: list[dict], rules: dict) -> dict:
+    r = rules["body"]
+    sets = [s for s in sets if s]
+    caveats = [f"采样最高约 60 Hz：悬挂速度的高速段（快速冲击，> {r['damper_split_mm_s']:.0f} mm/s 那部分）不准，只适合比较改调校前后的相对变化。",
+               "这些数字没有“标准答案”，用来比较改调校前后：防倾杆调硬 → 侧倾 mm/g 变小；弹簧调硬 → 点头 mm/g 变小、p99 降低；"
+               "阻尼调硬 → 悬挂速度分布变窄。",
+               f"已剔除压路肩前后 {r['kerb_window_s']:.2f} s 和低速的采样。"]
+    if not sets:
+        return {"available": False, "why": "数据不足：没有悬挂行程通道。", "caveats": caveats}
+    dts = [s["dt"] for s in sets]
+    out: dict = {"available": True, "laps": len(sets), "caveats": caveats, "notes": []}
+    notes = out["notes"]
+    # ---- 行程分位数
+    norm_sets = [s for s in sets if s["norm"] is not None]
+    if norm_sets:
+        wheels = {}
+        n_all = sum(s["norm"]["fl"].size for s in norm_sets)
+        if n_all >= r["min_samples"]:
+            for w in WHEELS:
+                a = np.concatenate([s["norm"][w] for s in norm_sets])
+                p1, p50, p99 = (float(np.percentile(a, q)) for q in (1, 50, 99))
+                wheels[w] = {"p1": p1, "p50": p50, "p99": p99, "near_bottom": float(np.mean(a >= r["near_bottom"])),
+                             "near_top": float(np.mean(a <= r["near_top"]))}
+            out["travel"] = {"wheels": wheels, "samples": n_all, "near_bottom": r["near_bottom"], "near_top": r["near_top"]}
+            for w, x in wheels.items():
+                if x["p99"] >= r["near_bottom"]:
+                    notes.append(f"{WHEEL_CN[w]}行程 p99 = {x['p99']:.2f}（≥ {r['near_bottom']:.2f}）：行程基本用满了，再软 / 再低就会触底。")
+                if x["p1"] <= r["near_top"]:
+                    notes.append(f"{WHEEL_CN[w]}行程 p1 = {x['p1']:.2f}（≤ {r['near_top']:.2f}）：会伸到最长（可能短暂离地）。")
+            f50 = (wheels["fl"]["p50"] + wheels["fr"]["p50"]) / 2
+            r50 = (wheels["rl"]["p50"] + wheels["rr"]["p50"]) / 2
+            notes.insert(0, f"行程中位数：前轴 {f50:.2f}、后轴 {r50:.2f}（0 = 伸到最长，1 = 压到底）。")
+        else:
+            out["travel"] = None
+            notes.append(f"悬挂行程采样太少（{n_all} 个，至少 {r['min_samples']} 个），不算分位数。")
+    else:
+        out["travel"] = None
+    # ---- 悬挂速度直方图
+    vel_sets = [s for s in sets if s["vel"] is not None]
+    if vel_sets and sum(s["vel"]["fl"].size for s in vel_sets) >= r["min_samples"]:
+        step, vmax, split = r["hist_bin_mm_s"], r["hist_max_mm_s"], r["damper_split_mm_s"]
+        edges = np.arange(-vmax, vmax + step / 2, step)
+        hist, classes, p95 = {}, {}, {}
+        for axle, ws in AXLE_WHEELS.items():
+            a = np.concatenate([s["vel"][w] for s in vel_sets for w in ws])
+            h, _ = np.histogram(np.clip(a, -vmax + 1e-6, vmax - 1e-6), bins=edges)
+            hist[axle] = (h / max(1, a.size)).tolist()
+        for w in WHEELS:
+            a = np.concatenate([s["vel"][w] for s in vel_sets])
+            classes[w] = {"rebound_fast": float(np.mean(a <= -split)), "rebound_slow": float(np.mean((a < 0) & (a > -split))),
+                          "bump_slow": float(np.mean((a >= 0) & (a < split))), "bump_fast": float(np.mean(a >= split))}
+            p95[w] = float(np.percentile(np.abs(a), 95))
+        out["damper"] = {"edges_mm_s": edges.tolist(), "hist": hist, "classes": classes, "p95_abs_mm_s": p95,
+                         "split_mm_s": split, "sign_flipped": any(s["sign_flipped"] for s in vel_sets)}
+        fb = (classes["fl"]["bump_fast"] + classes["fr"]["bump_fast"]) / 2
+        rb_ = (classes["rl"]["bump_fast"] + classes["rr"]["bump_fast"]) / 2
+        notes.append(f"悬挂速度：高速压缩（≥ {split:.0f} mm/s）占前轴 {_pct(fb)}、后轴 {_pct(rb_)} 的时间；"
+                     f"|速度| p95 前轴约 {(p95['fl'] + p95['fr']) / 2:.0f} mm/s、后轴约 {(p95['rl'] + p95['rr']) / 2:.0f} mm/s。")
+    else:
+        out["damper"] = None
+        if not vel_sets:
+            notes.append("没有悬挂行程（米）通道，算不了悬挂速度和侧倾 / 点头梯度。")
+    # ---- 侧倾 / 点头梯度（悬挂行程差，相对车身，不受赛道倾斜影响）
+    kf, tf = _fit_roll([s["roll"] for s in sets], "front", dts, r["min_fit_s"])
+    kr, _ = _fit_roll([s["roll"] for s in sets], "rear", dts, r["min_fit_s"])
+    if kf is not None and kr is not None:
+        share = kf / (kf + kr) if kf + kr > 0 else None
+        out["roll"] = {"front_mm_per_g": kf, "rear_mm_per_g": kr, "front_share": share, "time_s": round(tf, 1),
+                       "min_lat_g": r["roll_min_lat_g"]}
+        notes.append(f"侧倾（稳态弯 |横向 G| ≥ {r['roll_min_lat_g']:.1f}，{tf:.0f} s 数据）：前轴左右行程差 {kf:.1f} mm/g、后轴 {kr:.1f} mm/g"
+                     + (f"，前轴占 {_pct(share)}。" if share is not None else "。"))
+    else:
+        out["roll"] = None
+    pf = _fit_pitch([s["pitch"] for s in sets], dts, r["pitch_min_long_g"], r["min_fit_s"])
+    out["pitch"] = None
+    if pf["dive"] is not None or pf["squat"] is not None:
+        out["pitch"] = {"dive_mm_per_g": pf["dive"], "dive_s": round(pf["dive_s"], 1), "squat_mm_per_g": pf["squat"],
+                        "squat_s": round(pf["squat_s"], 1), "min_long_g": r["pitch_min_long_g"]}
+        parts = []
+        if pf["dive"] is not None:
+            parts.append(f"刹车点头 {pf['dive']:.1f} mm/g（{pf['dive_s']:.0f} s 数据）")
+        if pf["squat"] is not None:
+            parts.append(f"加速抬头 {pf['squat']:.1f} mm/g（{pf['squat_s']:.0f} s 数据）")
+        notes.append(f"点头 / 抬头（直线、|纵向 G| ≥ {r['pitch_min_long_g']:.1f}，前轴平均行程 − 后轴平均行程）：" + "，".join(parts) + "。")
+    # ---- roll / pitch 字段（参考）
+    use = [(s["ref"], s["dt"]) for s in sets if s["ref"] is not None and not s["ref"].get("missing")]
+    if not use:
+        out["attitude_ref"] = {"available": False,
+                               "why": "这圈没有 roll / pitch 通道（老版本录的圈没存，新录的圈才有），只用悬挂行程算。"}
+    else:
+        kroll, troll = _fit_roll([x["roll"] for x, _ in use], "front", [d for _, d in use], r["min_fit_s"])
+        pr = _fit_pitch([x["pitch"] for x, _ in use], [d for _, d in use], r["pitch_min_long_g"], r["min_fit_s"])
+        fixed = all(x["grade_fixed"] for x, _ in use)
+        out["attitude_ref"] = {"available": True, "roll_deg_per_g": kroll, "roll_s": round(troll, 1),
+                               "dive_deg_per_g": pr["dive"], "dive_s": round(pr["dive_s"], 1),
+                               "squat_deg_per_g": pr["squat"], "squat_s": round(pr["squat_s"], 1), "grade_fixed": fixed,
+                               "why": ("roll / pitch 是车在世界坐标里的姿态角：roll 里混着弯道倾斜和路面横坡（扣不掉），"
+                                       "pitch 里混着路面坡度（" + ("已用高度对距离的变化大致扣掉" if fixed else "没有高度数据，没扣") +
+                                       "），所以只作参考，以上面的悬挂行程为准。")}
+    return out
+
+
 # ================================================================ 交叉印证
 
 def _cross_reference(ctx: _Ctx) -> None:
@@ -1169,21 +2254,37 @@ def _cross_reference(ctx: _Ctx) -> None:
     if spin and os_exit:
         common = {l["corner"] for l in spin["locations"]} & {l["corner"] for l in os_exit["locations"]} - {None}
         if common:
-            txt = f"{'、'.join(sorted(common))} 出弯同时检测到转向过度和驱动轮空转：多半是同一件事——驱动轮空转让后轴丢了侧向抓地。"
+            txt = (f"{'、'.join(ctx.cn(c) for c in sorted(common, key=_corner_key))} 出弯同时检测到转向过度和驱动轮空转："
+                   "多半是同一件事——驱动轮空转让后轴丢了侧向抓地。")
             os_exit["evidence"].insert(len(os_exit["evidence"]) - 1, txt)
             spin["evidence"].insert(len(spin["evidence"]) - 1, txt)
     us_mid = by_id.get("understeer_mid")
     tire = by_id.get("tire_lr_front")
     if us_mid and tire and tire["severity"] != "info":
-        txt = f"同一圈还有弯中转向不足（{'、'.join(us_mid['data']['corners'])}）：前轮长时间过极限滑动，也会让外侧前胎更热。"
+        txt = f"同一圈还有弯中转向不足（{'、'.join(ctx.cn(c) for c in us_mid['data']['corners'])}）：前轮长时间过极限滑动，也会让外侧前胎更热。"
         tire["evidence"].insert(len(tire["evidence"]) - 1, txt)
+    # 抱死 × 直线重刹的前后对比：只有个别段偏向抱死的那根轴 → 更像是那一脚的问题，不是刹车平衡整体偏
+    bb = ctx.extra.get("brake_balance_counts")
+    for axle in ("front", "rear"):
+        lock = by_id.get(f"brake_lock_{axle}")
+        if not lock or not bb or f"brake_bias_{axle}" in by_id:
+            continue
+        k = bb[axle]
+        if bb["balanced"] >= max(1, bb["zones"] - k) and bb["balanced"] > k:
+            txt = (f"直线重刹段里 {bb['balanced']}/{bb['zones']} 段前后轴滑移差不多，只有 {k} 段{AXLE_CN[axle]}先饱和："
+                   f"刹车平衡整体并不偏{'前' if axle == 'front' else '后'}，这次抱死更像是那一脚踩得太猛 / 刹车压力偏大，"
+                   "先试驾驶和刹车压力，再考虑挪刹车平衡。")
+            lock["evidence"].insert(len(lock["evidence"]) - 1, txt)
+            lock["suggestions"] = [x for x in lock["suggestions"] if not x.startswith("先排除驾驶")]
+            lock["suggestions"].insert(0, "先排除驾驶：别一脚踩死，踩到快抱死的位置就停（其他重刹段前后平衡是正常的）")
 
 
 # ================================================================ 对外接口
 
 def _lap_info(meta: dict) -> dict:
     keys = ("id", "lap_number", "lap_time", "track_id", "track_name", "car_ordinal", "car_name", "car_class",
-            "car_pi", "game", "family", "kind", "is_complete", "flags", "distance_m", "session_id", "created_at")
+            "car_pi", "game", "family", "kind", "is_complete", "flags", "distance_m", "session_id", "created_at",
+            "setup_id", "setup_name")
     return {k: meta.get(k) for k in keys if k in meta}
 
 
@@ -1201,38 +2302,28 @@ def _sort_findings(findings: list[dict]) -> list[dict]:
                                            min((l["dist_m"] for l in f["locations"]), default=0.0)))
 
 
-def diagnose(lap: LapData, rules: dict | None = None) -> dict:
-    """单圈诊断。返回（可直接 JSON 化，没有 NaN）：
+def _rules_info(rules: dict | None) -> dict:
+    return rules_info() if rules is None else {"rules": _merge(DEFAULT_RULES, rules), "source": "调用方传入", "error": None}
 
-        mode: "single"
-        usable: 数据够不够做诊断
-        lap: 这圈的元数据（id、圈号、圈时、赛道、车……）
-        summary: 圈时、距离、采样率、驱动方式、最高转速、最高车速、用到的最高挡、弯道数、左右弯占比、热胎平均胎温、
-                 各严重程度的问题数 counts
-        corners: [{name, direction, start_m, apex_m, end_m, heading_change_deg, min_speed_kmh}]
-        findings: [{id, category, category_label, severity(info|warn|alert), title, summary, evidence[],
-                    locations[{dist_m, end_m, corner, phase, phase_label, wheel, wheel_label, t_s, duration_s, label}],
-                    basis{channels[], rule, principle}, suggestions[], caveat, confidence(low|medium|high), data{}}]
-                  按严重程度、置信度排序
-        checks: [{id, name, status(found|ok|skipped), note}]  每项检查做了什么、结论如何（“没发现”和“没法判断”分开）
-        not_available: [{item, why, instead}]  Data Out 给不了、所以判断不了的东西
-        data_quality: [{level(info|warn|error), text}]
-        rules: {source, error}  阈值来自哪个文件
-    """
-    info = rules_info() if rules is None else {"rules": _merge(DEFAULT_RULES, rules), "source": "调用方传入", "error": None}
-    ctx = _Ctx(lap, info["rules"])
+
+CHECKS = (_check_balance, _check_suspension, _check_tires, _check_traction, _check_brakes, _check_brake_balance,
+          _check_brake_pressure, _check_differential, _check_gearing)
+
+
+def _run(lap: LapData, info: dict, corners: list[dict] | None, abs_on: bool | None, aero: bool | None) -> tuple[dict, _Ctx]:
+    """单圈诊断，返回 (可 JSON 化的结果, 上下文)。上下文里的 samples 给多圈合并拼分析块用。"""
+    ctx = _Ctx(lap, info["rules"], abs_on=abs_on, aero=aero)
     if info["error"]:
         ctx.note("warn", info["error"])
     usable = _check_quality(ctx)
     if usable:
-        _find_corners(ctx)
-        for fn in (_check_balance, _check_suspension, _check_tires, _check_traction, _check_brakes, _check_gearing):
+        _find_corners(ctx, corners)
+        for fn in CHECKS:
             fn(ctx)
         _cross_reference(ctx)
+        ctx.samples["body"] = _body_samples(ctx)
     else:
-        for cid, nm in (("balance", "转向平衡（转向不足 / 转向过度）"), ("suspension", "悬挂触底 / 伸到底"),
-                        ("tires", "胎温平衡"), ("traction", "驱动轮空转"), ("brakes", "刹车抱死"),
-                        ("gearing", "齿比（最高挡撞断油 / 转速余量）")):
+        for cid, nm in CHECK_LIST:
             ctx.check(cid, nm, "skipped", "数据不足，未检查。")
     findings = _sort_findings(ctx.findings)
     m = ctx.meta
@@ -1250,37 +2341,90 @@ def diagnose(lap: LapData, rules: dict | None = None) -> dict:
         "max_speed_kmh": round(float(spd.max()) * 3.6, 1) if spd is not None and spd.size else None,
         "top_gear_used": ctx.extra.get("top_gear_used"),
         "corner_count": len(ctx.corners),
+        "corner_source": ctx.corner_source,
         "turn_share": {"right": round(share["right"], 3), "left": round(share["left"], 3)} if share else None,
         "tire_temps_c": ctx.extra.get("tire_temps_c"),
         "has_dash": ctx.dash,
+        "assists": {"abs_on": abs_on, "aero": aero},
         "counts": {s: sum(1 for f in findings if f["severity"] == s) for s in ("alert", "warn", "info")},
     }
-    corners = [{"name": c["name"], "direction": c["direction"], "start_m": round(c["start_m"], 1),
-                "apex_m": round(c["apex_m"], 1), "end_m": round(c["end_m"], 1),
-                "heading_change_deg": c["heading_change_deg"], "min_speed_kmh": round(c["min_speed"] * 3.6, 1)}
-               for c in ctx.corners]
-    return _json_safe({
+    rr = info["rules"]
+    blocks = _blocks([ctx], rr, abs_on, aero) if usable else _blocks([], rr, abs_on, aero)
+    res = {
         "mode": "single", "usable": usable, "lap": _lap_info(m), "lap_label": _lap_label(m), "summary": summary,
-        "corners": corners, "findings": findings, "checks": ctx.checks, "not_available": copy.deepcopy(NOT_AVAILABLE),
-        "data_quality": ctx.quality, "rules": {"source": info["source"], "error": info["error"]},
-    })
+        "corners": _corners_out(ctx.corners), "findings": findings, "checks": ctx.checks,
+        "not_available": copy.deepcopy(NOT_AVAILABLE), "data_quality": ctx.quality,
+        "rules": {"source": info["source"], "error": info["error"]}, **blocks,
+    }
+    return _json_safe(res), ctx
 
 
-def diagnose_many(laps: list[LapData], rules: dict | None = None) -> dict:
-    """多圈合并（同一辆车、同一条赛道的几圈）。
+def _corners_out(corners: list[dict]) -> list[dict]:
+    out = []
+    for c in corners:
+        ms = c.get("min_speed")
+        out.append({"name": c["name"], "label": _corner_label(c), "direction": c["direction"],
+                    "start_m": round(c["start_m"], 1), "apex_m": round(c["apex_m"], 1), "end_m": round(c["end_m"], 1),
+                    "heading_change_deg": c.get("heading_change_deg"),
+                    "min_speed_kmh": round(ms * 3.6, 1) if ms is not None and math.isfinite(ms) else None})
+    return out
+
+
+def _blocks(ctxs: list[_Ctx], rules: dict, abs_on: bool | None, aero: bool | None) -> dict:
+    """三个分析块（单圈：一个 ctx；多圈：所有可用圈的 ctx 拼起来）。"""
+    return {
+        "balance_map": _balance_block([c.samples.get("balance") for c in ctxs], rules, aero),
+        "brake_analysis": _brake_block([c.samples.get("brake_zones") for c in ctxs],
+                                       [c.samples.get("brake_pedal") for c in ctxs], rules, abs_on),
+        "body": _body_block([c.samples.get("body") for c in ctxs], rules),
+    }
+
+
+def diagnose(lap: LapData, rules: dict | None = None, corners: list[dict] | None = None, *,
+             abs_on: bool | None = None, aero: bool | None = None) -> dict:
+    """单圈诊断。返回（可直接 JSON 化，没有 NaN）：
+
+        mode: "single"
+        usable: 数据够不够做诊断
+        lap: 这圈的元数据（id、圈号、圈时、赛道、车、调校版本……）
+        summary: 圈时、距离、采样率、驱动方式、最高转速、最高车速、用到的最高挡、弯道数、弯道来源（layout / detected）、
+                 左右弯占比、热胎平均胎温、用户勾选的辅助 assists{abs_on, aero}、各严重程度的问题数 counts
+        corners: [{name（编号 T1…）, label（显示名）, direction, start_m, apex_m, end_m, heading_change_deg, min_speed_kmh}]
+        findings: [{id, category, category_label, severity(info|warn|alert), title, summary, evidence[],
+                    locations[{dist_m, end_m, corner, phase, phase_label, wheel, wheel_label, t_s, duration_s, label}],
+                    basis{channels[], rule, principle}, suggestions[], caveat, confidence(low|medium|high), data{}}]
+                  按严重程度、置信度排序
+        checks: [{id, name, status(found|ok|skipped), note}]  每项检查做了什么、结论如何（“没发现”和“没法判断”分开）
+        balance_map / brake_analysis / body: 分析块（画图用的量化数据 + 解读句，结构见 _balance_block 等）
+        not_available: [{item, why, instead}]  Data Out 给不了、所以判断不了的东西
+        data_quality: [{level(info|warn|error), text}]
+        rules: {source, error}  阈值来自哪个文件
+
+    corners：外部给的弯道表（如 sectors.layout_corners 的结果，name 必须是 T1… 编号，可带 label），不给就本圈自己识别。
+    abs_on / aero：用户勾选的“我开了 ABS”/“有可调空力”（None = 没说），只影响刹车 / 平衡结论的措辞和置信度。
+    """
+    return _run(lap, _rules_info(rules), corners, abs_on, aero)[0]
+
+
+def diagnose_many(laps: list[LapData], rules: dict | None = None, corners: list | None = None, *,
+                  abs_on: bool | None = None, aero: bool | None = None) -> dict:
+    """多圈合并（同一辆车、同一条赛道的几圈）。corners = 和 laps 一一对应的弯道表列表（元素可为 None）。
 
     每圈先单独诊断，再按 finding.id 合并：
     - 每圈都出现（≥ 2 圈）→ 置信度升一级；
     - 只在少于 sporadic_frac 比例的圈里出现 → 视为偶发，严重程度、置信度各降一级；
     - evidence 开头写“在几圈里出现”，接着是代表圈（最严重那圈）的完整证据，再每圈一行摘要；
     - locations 合并所有圈，每个位置带 lap_id / lap_label。
+    分析块（平衡分布 / 刹车 / 车身）把所有可用圈的采样拼起来算，热力表按弯道编号对齐。
     返回结构和 diagnose() 一样（mode = "multi"），另有 laps（每圈摘要）和每条 finding 的 repeat 字段。
     """
-    info = rules_info() if rules is None else {"rules": _merge(DEFAULT_RULES, rules), "source": "调用方传入", "error": None}
+    info = _rules_info(rules)
     rr = info["rules"]
-    results = [diagnose(l, rr) for l in laps]
-    for res in results:
-        res["rules"] = {"source": info["source"], "error": info["error"]}
+    corners = list(corners) if corners is not None else []
+    corners += [None] * (len(laps) - len(corners))
+    runs = [_run(l, info, c, abs_on, aero) for l, c in zip(laps, corners)]
+    results = [x[0] for x in runs]
+    usable_ctx = [ctx for res, ctx in runs if res["usable"]]
     usable = [x for x in results if x["usable"]]
     quality: list[dict] = []
     if info["error"]:
@@ -1289,10 +2433,13 @@ def diagnose_many(laps: list[LapData], rules: dict | None = None) -> dict:
         quality.append({"level": "error", "text": "数据不足：没有给任何一圈。"})
     cars = {(l.meta.get("game"), l.meta.get("car_ordinal")) for l in laps}
     tracks = {l.meta.get("track_id") for l in laps}
+    setups = {l.meta.get("setup_id") for l in laps}
     if len(cars) > 1:
         quality.append({"level": "warn", "text": "这几圈不是同一辆车，合并结果仅供参考（不同车的问题不能互相印证）。"})
     if len(tracks) > 1:
         quality.append({"level": "warn", "text": "这几圈不是同一条赛道，合并结果仅供参考（弯道编号对不上）。"})
+    if len(setups) > 1 and setups != {None}:
+        quality.append({"level": "info", "text": "这几圈不是同一个调校版本：合并后看到的是几套调校的混合结果。"})
     # 每圈的数据质量提示：相同文字合并，注明是哪几圈
     seen: dict[str, dict] = {}
     for res in results:
@@ -1315,6 +2462,7 @@ def diagnose_many(laps: list[LapData], rules: dict | None = None) -> dict:
         for f in res["findings"]:
             groups.setdefault(f["id"], []).append((res, f))
     merged = []
+
     def _flying(res: dict) -> bool:
         return "first_lap" not in (res["lap"].get("flags") or [])
 
@@ -1349,7 +2497,7 @@ def diagnose_many(laps: list[LapData], rules: dict | None = None) -> dict:
     # 摘要 / 弯道表用的参考圈：优先第一个非“第一圈”的可用圈
     first = next((x for x in usable if _flying(x)), usable[0] if usable else (results[0] if results else None))
     checks = []
-    for cid in ("balance", "suspension", "tires", "traction", "brakes", "gearing"):
+    for cid, _ in CHECK_LIST:
         rows = [(res["lap_label"], c) for res in results for c in res["checks"] if c["id"] == cid]
         if not rows:
             continue
@@ -1362,18 +2510,22 @@ def diagnose_many(laps: list[LapData], rules: dict | None = None) -> dict:
                  for txt, lbls in by_note.items()]
         checks.append({"id": cid, "name": rows[0][1]["name"], "status": status, "note": "\n".join(parts)})
     lap_rows = [{"id": res["lap"].get("id"), "label": res["lap_label"], "lap_number": res["lap"].get("lap_number"),
-                 "lap_time_s": res["summary"]["lap_time_s"], "usable": res["usable"], "counts": res["summary"]["counts"]}
+                 "lap_time_s": res["summary"]["lap_time_s"], "usable": res["usable"], "counts": res["summary"]["counts"],
+                 "setup_id": res["lap"].get("setup_id"), "setup_name": res["lap"].get("setup_name"),
+                 "corner_source": res["summary"].get("corner_source")}
                 for res in results]
     summary = dict(first["summary"]) if first else {}
     summary["counts"] = {s: sum(1 for f in findings if f["severity"] == s) for s in ("alert", "warn", "info")}
     summary["laps_used"] = n
     summary["laps_total"] = n_all
     summary["reference_lap"] = first["lap_label"] if first else None
+    summary["assists"] = {"abs_on": abs_on, "aero": aero}
     return _json_safe({
         "mode": "multi", "usable": n > 0, "lap": first["lap"] if first else {}, "lap_label": f"{n_all} 圈合并",
         "laps": lap_rows, "summary": summary, "corners": first["corners"] if first else [],
         "findings": findings, "checks": checks, "not_available": copy.deepcopy(NOT_AVAILABLE),
         "data_quality": quality, "rules": {"source": info["source"], "error": info["error"]},
+        **_blocks(usable_ctx, rr, abs_on, aero),
     })
 
 
