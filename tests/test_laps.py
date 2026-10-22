@@ -253,6 +253,65 @@ def test_first_lap_picks_closest_layout(tmp_path):
     store.close()
 
 
+def test_first_lap_of_other_layout_sharing_start_line(tmp_path):
+    """共用起终点线的两个布局（3800 m / 2500 m）：短布局的起步圈不能并进长布局，
+    也不能拿去当长布局的最快圈；只存过起步圈的赛道，别的布局的飞驰圈也不能不看圈长就并进来。"""
+    store = Store(tmp_path / "t.db")
+    kw = dict(family="fh", game="fh5", kind="circuit", track_ordinal=None, start_x=100, start_z=200)
+    a = store.find_or_create_track(length_m=3800, **kw)
+    _meta_lap(store, a, 3800)
+    b_first = store.find_or_create_track(length_m=2600, first_lap=True, **kw)    # 比 A 短 32%：不是 A
+    assert b_first != a
+    assert store.get_track(b_first)["ref_length_m"] is None
+    assert store.get_track(b_first)["provisional_length_m"] == 2600
+    _meta_lap(store, b_first, 2600, flags=["first_lap"])
+    assert store.find_or_create_track(length_m=2500, **kw) == b_first             # B 的飞驰圈：比起步圈短 3.8%
+    assert store.best_lap(a)["distance_m"] == 3800                                # A 的最快圈没被起步圈污染
+    # 起步圈最多比参考圈长 15%，不会比它短（超过 4%）
+    assert store.find_or_create_track(length_m=3800 * 1.14, first_lap=True, **kw) == a
+    assert store.find_or_create_track(length_m=3800 * 1.17, first_lap=True, **kw) not in (a, b_first)
+    store.close()
+
+    store = Store(tmp_path / "t2.db")
+    t1 = store.find_or_create_track(length_m=2600, first_lap=True, **kw)          # 只跑了一圈起步圈就退出
+    assert store.find_or_create_track(length_m=3800, **kw) != t1                  # 别的布局的飞驰圈：另建
+    assert store.find_or_create_track(length_m=2450, first_lap=True, **kw) == t1  # 发车位置靠前的起步圈
+    assert store.get_track(t1)["provisional_length_m"] == 2450                   # 暂定圈长取最短的起步圈
+    assert store.find_or_create_track(length_m=2700, **kw) != t1                  # 比最短的起步圈还长 > 4%：不是
+    assert store.find_or_create_track(length_m=2400, **kw) == t1
+    store.close()
+
+
+def test_old_db_gets_provisional_length(tmp_path):
+    """老库（tracks 没有 provisional_length_m 列）：打开时补列，只有起步圈的赛道用最短的起步圈补上暂定圈长。"""
+    import sqlite3
+    path = tmp_path / "old.db"
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE TABLE tracks (id INTEGER PRIMARY KEY AUTOINCREMENT, family TEXT NOT NULL, game TEXT,
+            track_ordinal INTEGER, kind TEXT NOT NULL, name TEXT, start_x REAL, start_z REAL,
+            ref_length_m REAL, created_at TEXT);
+        CREATE TABLE laps (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER, track_id INTEGER, game TEXT,
+            family TEXT, fmt TEXT, car_ordinal INTEGER, car_class INTEGER, car_pi INTEGER, lap_number INTEGER,
+            kind TEXT, lap_time REAL, time_source TEXT, distance_m REAL, max_speed REAL, is_complete INTEGER,
+            flags TEXT, meta TEXT, note TEXT, sample_count INTEGER, created_at TEXT, samples BLOB);
+        INSERT INTO tracks (family, kind, start_x, start_z, ref_length_m) VALUES ('fh', 'circuit', 0, 0, 3000);
+        INSERT INTO tracks (family, kind, start_x, start_z, ref_length_m) VALUES ('fh', 'circuit', 0, 0, NULL);
+        INSERT INTO laps (track_id, kind, distance_m, is_complete, flags) VALUES (2, 'lap', 2700, 1, '["first_lap"]');
+        INSERT INTO laps (track_id, kind, distance_m, is_complete, flags) VALUES (2, 'lap', 2650, 1, '["first_lap"]');
+    """)
+    db.commit()
+    db.close()
+    store = Store(path)
+    assert store.get_track(1)["provisional_length_m"] is None
+    assert store.get_track(2)["provisional_length_m"] == 2650
+    kw = dict(family="fh", game="fh5", kind="circuit", track_ordinal=None, start_x=0, start_z=0)
+    assert store.find_or_create_track(length_m=2550, **kw) == 2
+    assert store.find_or_create_track(length_m=3050, **kw) == 1
+    store.close()
+    Store(path).close()                                                          # 再打开一次：不重复补列
+
+
 def test_circuit_reference_length_is_flying_median(tmp_path):
     """赛道参考圈长 = 飞驰圈距离中位数（可变短，不是 MAX）；起步圈不参与；冲刺路线仍取最长。"""
     store = Store(tmp_path / "t.db")

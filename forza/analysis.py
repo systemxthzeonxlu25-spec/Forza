@@ -51,12 +51,14 @@ SUMMARY_TOP_N = 3
 
 # ---------------------------------------------------------------- 驾驶细节：滑行 / 松刹车 / 带刹车入弯 / 出弯收油 / 修方向 / 反打
 # 只看踏板和方向盘输入。手柄死区大、方向抖动多的话，调大 STEER_CORR_MIN / COUNTER_STEER_MIN。
-COAST_THROTTLE_MAX = 0.05     # 油门 < 5%……
+COAST_THROTTLE_MAX = 0.02     # 油门 < 2%（基本松开；3~8% 是常见的维持油门，不算滑行）……
 COAST_BRAKE_MAX = 0.05        # ……刹车 < 5%……
 COAST_CLUTCH_MAX = 0.50       # ……离合没踩下（换挡瞬间的空油门不算滑行）……
 COAST_MIN_KMH = 30.0          # ……车速 > 30 km/h，才算“滑行”
 COAST_MIN_RUN_S = 0.15        # 连续滑行超过这么久才计入
 COAST_DIFF_S = 0.20           # 两圈滑行时间差超过这个才说
+COAST_THROTTLE_LOOSE = 0.05   # 比较两圈时的回差：另一圈按 油门 < 5%、刹车 < 8% 再算一遍滑行时间，
+COAST_BRAKE_LOOSE = 0.08      # 免得维持油门 4% / 6% 这种擦边情况报成“滑行 1.6 s（参考圈 0.0 s）”
 BRAKE_OFF = 0.05              # 刹车低于这个算完全松开
 RELEASE_FROM = 0.90           # “开始松刹车” = 弯心前最后一次刹车 ≥ 峰值 × 这个比例的位置
 RELEASE_DIFF_M = 12.0         # 松刹车（从重刹到松开）用的距离差超过这么多米……
@@ -447,7 +449,8 @@ def _corner_metrics(info: dict, rs_ref: dict, rs_oth: dict, s0_i: int, s1_i: int
     turn_lo = max(s0_i, s_i - int(TURN_IN_SEARCH_M / step))
     loose: dict = {}
     for side, rs, b_i in (("ref", rs_ref, b_ref), ("other", rs_oth, b_oth)):
-        cp, cm, cx = _coast_time(rs, s0_i, s1_i, a_i if b_i is None else min(b_i, a_i), a_i)
+        split_i = a_i if b_i is None else min(b_i, a_i)
+        cp, cm, cx = _coast_time(rs, s0_i, s1_i, split_i, a_i)
         out[f"coast_pre_{side}_s"] = _r(cp, 2)          # 刹车点之前（松油还没踩刹车）的滑行时间
         out[f"coast_mid_{side}_s"] = _r(cm, 2)          # 松开刹车到弯心之间的滑行时间
         out[f"coast_exit_{side}_s"] = _r(cx, 2)         # 弯心之后（迟迟不给油）的滑行时间
@@ -460,6 +463,8 @@ def _corner_metrics(info: dict, rs_ref: dict, rs_oth: dict, s0_i: int, s1_i: int
         ti = _turn_in_point(rs["steer"], turn_lo, a_i, sign)
         out[f"turn_in_{side}_m"] = None if ti is None else round(ti * step, 1)
         # 放宽阈值再数一遍（只用来比较，不输出）
+        lp, lm, lx = _coast_time(rs, s0_i, s1_i, split_i, a_i, loose=True)
+        loose[f"coast_pre_{side}_s"], loose[f"coast_mid_{side}_s"], loose[f"coast_exit_{side}_s"] = lp, lm, lx
         loose[f"lifts_{side}"] = _lift_count(rs["throttle"], a_i, exit_hi, LIFT_MIN - LIFT_MARGIN)
         loose[f"steer_corrections_{side}"] = _steer_corrections(rs["steer"], s_i, e_i, sign, step,
                                                                  STEER_CORR_MIN - STEER_MARGIN)
@@ -480,15 +485,20 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(np.nonzero(d == 1)[0].tolist(), (np.nonzero(d == -1)[0] - 1).tolist()))
 
 
-def _coast_mask(rs: dict) -> np.ndarray:
-    """每个网格点是不是“滑行”：油门、刹车都没踩，离合没踩，车还在跑。"""
-    if "_coast" not in rs:
-        rs["_coast"] = ((rs["throttle"] < COAST_THROTTLE_MAX) & (rs["brake"] < COAST_BRAKE_MAX)
-                        & (rs["clutch"] < COAST_CLUTCH_MAX) & (rs["speed_kmh"] > COAST_MIN_KMH))
-    return rs["_coast"]
+def _coast_mask(rs: dict, loose: bool = False) -> np.ndarray:
+    """每个网格点是不是“滑行”：油门、刹车都没踩，离合没踩，车还在跑。
+    loose=True 用放宽的阈值（COAST_THROTTLE_LOOSE / COAST_BRAKE_LOOSE），只给两圈比较时做回差用。"""
+    key = "_coast_loose" if loose else "_coast"
+    if key not in rs:
+        thr_max, brk_max = ((COAST_THROTTLE_LOOSE, COAST_BRAKE_LOOSE) if loose
+                            else (COAST_THROTTLE_MAX, COAST_BRAKE_MAX))
+        rs[key] = ((rs["throttle"] < thr_max) & (rs["brake"] < brk_max)
+                   & (rs["clutch"] < COAST_CLUTCH_MAX) & (rs["speed_kmh"] > COAST_MIN_KMH))
+    return rs[key]
 
 
-def _coast_time(rs: dict, i0: int, i1: int, brake_i: int, apex_i: int) -> tuple[float, float, float]:
+def _coast_time(rs: dict, i0: int, i1: int, brake_i: int, apex_i: int,
+                loose: bool = False) -> tuple[float, float, float]:
     """[i0, i1] 里持续 ≥ COAST_MIN_RUN_S 的滑行时间（s），按 刹车点前 / 刹车点~弯心 / 弯心后 分三份。"""
     if i1 <= i0:
         return 0.0, 0.0, 0.0
@@ -496,7 +506,7 @@ def _coast_time(rs: dict, i0: int, i1: int, brake_i: int, apex_i: int) -> tuple[
     n = len(t)
     cell_dt = np.diff(t, append=t[-1])                # 每个网格点到下一个点的用时
     keep = np.zeros(n, dtype=bool)
-    for r0, r1 in _runs(_coast_mask(rs)[i0:i1 + 1]):
+    for r0, r1 in _runs(_coast_mask(rs, loose)[i0:i1 + 1]):
         g0, g1 = i0 + r0, i0 + r1
         if float(t[min(g1 + 1, n - 1)] - t[g0]) >= COAST_MIN_RUN_S:
             keep[g0:g1 + 1] = True
@@ -637,8 +647,14 @@ def _clauses(seg: dict, loose: dict | None = None) -> list[str]:
         return o > loose.get(f"{key}_ref", r), r > loose.get(f"{key}_other", o)
 
     def coast_diff(key: str) -> tuple[float, float] | None:
+        """两圈滑行时间差够大时返回 (这圈, 参考圈)。比较时另一圈用放宽阈值算的滑行时间（回差），擦边的不算。"""
         o, r = seg[f"{key}_other_s"], seg[f"{key}_ref_s"]
-        return (o, r) if o is not None and r is not None and abs(o - r) >= COAST_DIFF_S else None
+        if o is None or r is None:
+            return None
+        o_loose, r_loose = loose.get(f"{key}_other_s", o), loose.get(f"{key}_ref_s", r)
+        if o - r_loose >= COAST_DIFF_S or r - o_loose >= COAST_DIFF_S:
+            return o, r
+        return None
 
     br, bo = seg["brake_ref_m"], seg["brake_other_m"]
     # 刹车前松油滑行（“入弯前滑行了 0.4 s”）

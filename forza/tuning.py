@@ -45,7 +45,7 @@ RULES_PATH = Path(__file__).with_name("tuning_rules.toml")
 # 内置默认阈值（和 tuning_rules.toml 一致；每项的含义见 toml 里的注释）
 DEFAULT_RULES: dict = {
     "general": {"min_lap_m": 400.0, "min_duration_s": 20.0, "min_samples": 200, "min_speed_ms": 8.0,
-                "merge_gap_s": 0.10, "low_sample_hz": 20.0},
+                "merge_gap_s": 0.10, "low_sample_hz": 20.0, "handbrake_max": 0.10, "clutch_max": 0.50},
     "balance": {"grip_limit": 1.0, "axle_diff": 0.30, "min_duration_s": 0.25, "min_lat_g": 0.30,
                 "mid_min_lat_g": 0.50, "entry_min_brake": 0.10, "entry_min_steer": 0.05,
                 "exit_min_throttle": 0.50, "exit_extend_m": 30.0, "min_phase_s": 0.30,
@@ -369,6 +369,29 @@ class _Ctx:
                 "duration_s": round(self.dur(i0, i1), 2), "label": label}
 
 
+def _hands_off(ctx: _Ctx, region: np.ndarray, *, clutch: bool = False) -> tuple[np.ndarray, str]:
+    """去掉拉着手刹（clutch=True 时还有踩着离合）的采样。
+
+    拉手刹时后轮是被手刹拖住的（FH 里用手刹过发卡弯很常见）；踩着离合时发动机制动 / 驱动力传不到车轮。
+    这些采样里的滑移是司机操作造成的，不能算到刹车平衡、刹车压力、差速器、空转、转向平衡头上。
+    返回 (可用的采样掩码, 说明)：说明是 region 里被去掉的时间，例如“（拉手刹 0.40 s 不计）”，没去掉就是空字符串。
+    老圈没有手刹 / 离合通道就全算。
+    """
+    g = ctx.r["general"]
+    ok = np.ones(ctx.n, bool)
+    parts = []
+    for ch_name, lim, word in (("handbrake", g["handbrake_max"], "拉手刹"), ("clutch", g["clutch_max"], "踩离合")):
+        a = ctx.ch(ch_name) if (ch_name == "handbrake" or clutch) else None
+        if a is None:
+            continue
+        on = a >= lim
+        s = float(np.sum(region & on) * ctx.dt)
+        if s > 0:
+            parts.append(f"{word} {s:.2f} s")
+        ok &= ~on
+    return ok, (f"（{'、'.join(parts)} 不计）" if parts else "")
+
+
 # ================================================================ 数据质量
 
 def _check_quality(ctx: _Ctx) -> bool:
@@ -531,6 +554,8 @@ def _check_balance(ctx: _Ctx) -> None:
     spd_kmh = np.abs(ctx.ch("speed")) * 3.6
     # 平衡分布（按车速分档）用所有“在转弯”的采样：横向 G ≥ min_lat_g、车速够
     turning = (glat >= r["min_lat_g"]) & ctx.speed_ok
+    hands, hand_txt = _hands_off(ctx, turning)    # 拉手刹甩尾是司机故意的，不算调校的平衡问题
+    turning &= hands
     ctx.samples["balance"] = {
         "dt": ctx.dt, "speed_kmh": spd_kmh[turning], "b": (fa - ra)[turning], "fa": fa[turning], "ra": ra[turning],
         "cells": None, "corners": [], "corner_source": ctx.corner_source, "lap_label": _lap_label(ctx.meta),
@@ -553,7 +578,7 @@ def _check_balance(ctx: _Ctx) -> None:
             & (brk < r["entry_min_brake"]) & (glat >= r["min_lat_g"]),
         )
         for p, m in enumerate(masks):
-            m = m & ctx.speed_ok & (phase == -1)
+            m = m & ctx.speed_ok & hands & (phase == -1)
             phase[m] = p
             cidx[m] = c["index"]
     # 热力表（弯 × 阶段）用分好阶段的采样
@@ -575,7 +600,7 @@ def _check_balance(ctx: _Ctx) -> None:
                 evaluated[p] += 1
     n_eval = sum(evaluated.values())
     eval_txt = (f"评估了 {len(ctx.corners)} 个弯里数据足够的 {n_eval} 个阶段"
-                f"（入弯 {evaluated[0]} / 弯中 {evaluated[1]} / 出弯 {evaluated[2]}）")
+                f"（入弯 {evaluated[0]} / 弯中 {evaluated[1]} / 出弯 {evaluated[2]}）{hand_txt}")
     if n_eval == 0:
         ctx.check("balance", name, "skipped",
                   f"数据不足：识别出 {len(ctx.corners)} 个弯，但没有一个阶段的数据超过 {r['min_phase_s']} s。")
@@ -1022,6 +1047,8 @@ def _check_traction(ctx: _Ctx) -> None:
         ctx.note("info", "不知道驱动方式（meta 里没有 drivetrain），空转检查按四轮都算驱动轮。")
     thr, brk = ctx.ch("throttle"), ctx.ch("brake")
     pedal = (thr >= r["min_throttle"]) & (brk < r["max_brake"]) & ctx.speed_ok
+    hands, hand_txt = _hands_off(ctx, pedal)      # 拉着手刹给油时后轮是被手刹拖住，不是空转
+    pedal &= hands
     sr = {w: np.abs(ctx.ch(f"slip_ratio_{w}")) for w in driven}
     spin = {w: pedal & (sr[w] > r["slip_limit"]) for w in driven}
     any_spin = np.zeros(ctx.n, bool)
@@ -1042,7 +1069,7 @@ def _check_traction(ctx: _Ctx) -> None:
     mx = max(float(sr[w][pedal].max()) if pedal.any() else 0.0 for w in driven)
     if not events:
         ctx.check("traction", name, "ok", f"{dt_txt}：给油（≥ {_pct(r['min_throttle'])}）时驱动轮 |滑移率| 最大 {mx:.2f}，"
-                                          f"没超过 {r['slip_limit']:.2f}。")
+                                          f"没超过 {r['slip_limit']:.2f}{hand_txt}。")
         return
     total = sum(e["dur"] for e in events)
     sev = "alert" if total >= r["alert_total_s"] or len(events) >= r["alert_events"] else "warn"
@@ -1126,7 +1153,7 @@ def _check_traction(ctx: _Ctx) -> None:
                                        "both_wheels": both_axle_spin, "single_wheel": single_spin,
                                        "inner_only": inner_only, "outer_only": outer_only, "rear_slip_angle_rise": sa_rise}))
     ctx.check("traction", name, "found", f"{dt_txt}：给油时驱动轮空转 {len(events)} 次、累计 {total:.2f} s，"
-                                         f"|滑移率| 最大 {mx:.2f}（阈值 {r['slip_limit']:.2f}）。")
+                                         f"|滑移率| 最大 {mx:.2f}（阈值 {r['slip_limit']:.2f}）{hand_txt}。")
 
 
 # ================================================================ ⑤ 刹车抱死
@@ -1142,6 +1169,8 @@ def _check_brakes(ctx: _Ctx) -> None:
     brk = ctx.ch("brake")
     steer = np.abs(ctx.ch("steer"))
     braking = (brk >= r["min_brake"]) & ctx.speed_ok
+    hands, hand_txt = _hands_off(ctx, braking)    # 手刹拖住的后轮不是刹车平衡的问题
+    braking &= hands
     sr = {w: np.abs(ctx.ch(f"slip_ratio_{w}")) for w in WHEELS}
     lock = {w: braking & (sr[w] > r["slip_limit"]) for w in WHEELS}
     found = []
@@ -1174,9 +1203,10 @@ def _check_brakes(ctx: _Ctx) -> None:
     mx = max(float(sr[w][braking].max()) if braking.any() else 0.0 for w in WHEELS)
     if found:
         ctx.check("brakes", name, "found", f"刹车（≥ {_pct(r['min_brake'])}）时{'，'.join(found)}；四轮 |滑移率| 最大 {mx:.2f}"
-                                           f"（阈值 {r['slip_limit']:.2f}）。")
+                                           f"（阈值 {r['slip_limit']:.2f}）{hand_txt}。")
     else:
-        ctx.check("brakes", name, "ok", f"刹车（≥ {_pct(r['min_brake'])}）时四轮 |滑移率| 最大 {mx:.2f}，没超过 {r['slip_limit']:.2f}。")
+        ctx.check("brakes", name, "ok", f"刹车（≥ {_pct(r['min_brake'])}）时四轮 |滑移率| 最大 {mx:.2f}，没超过 {r['slip_limit']:.2f}"
+                                        f"{hand_txt}。")
 
 
 def _lock_finding(ctx: _Ctx, axle: str, other: str, events: list[dict]) -> dict:
@@ -1264,6 +1294,8 @@ def _check_brake_balance(ctx: _Ctx) -> None:
     rsr = (np.abs(ctx.ch("slip_ratio_rl")) + np.abs(ctx.ch("slip_ratio_rr"))) / 2
     kerb = _near_kerb(ctx, r["kerb_window_s"])
     m = (brk >= r["min_brake"]) & (steer < r["max_steer"]) & (spd > r["min_speed_kmh"]) & ~kerb
+    hands, hand_txt = _hands_off(ctx, m)          # 拉手刹时后轮被手刹拖住，前后轴对比就不是刹车平衡了
+    m &= hands
 
     def first_mark(a: np.ndarray) -> int | None:
         hit = np.flatnonzero((a[:-1] >= r["slip_mark"]) & (a[1:] >= r["slip_mark"])) if a.size > 1 else np.array([])
@@ -1304,10 +1336,10 @@ def _check_brake_balance(ctx: _Ctx) -> None:
                                    "lap_id": ctx.meta.get("id")} for z in zones]
     ev = [z for z in zones if z["bias"] is not None]
     rule_txt = (f"直线重刹段 = 刹车 ≥ {_pct(r['min_brake'])}、|方向盘| < {_pct(r['max_steer'])}、车速 > {r['min_speed_kmh']:.0f} km/h、"
-                f"前后 {r['kerb_window_s']:.2f} s 内没压路肩，连续 ≥ {r['min_zone_s']:.2f} s")
+                f"前后 {r['kerb_window_s']:.2f} s 内没压路肩、没拉手刹，连续 ≥ {r['min_zone_s']:.2f} s")
     if len(ev) < r["min_zones"]:
         ctx.check(cid, name, "skipped", f"数据不足：只有 {len(ev)} 段够重的直线重刹（{rule_txt}，"
-                                        f"且某一轴滑移率峰值 ≥ {r['min_eval_peak']:.2f}；至少要 {r['min_zones']} 段）。")
+                                        f"且某一轴滑移率峰值 ≥ {r['min_eval_peak']:.2f}；至少要 {r['min_zones']} 段）{hand_txt}。")
         return
     n_f = sum(1 for z in ev if z["bias"] == "front")
     n_r = sum(1 for z in ev if z["bias"] == "rear")
@@ -1319,9 +1351,9 @@ def _check_brake_balance(ctx: _Ctx) -> None:
         other = n_r if axle == "front" else n_f
         if k >= r["min_zones"] and k / len(ev) >= r["dominant_share"] and k > other:
             ctx.findings.append(_brake_bias_finding(ctx, axle, ev, k, count_txt, rule_txt))
-            ctx.check(cid, name, "found", count_txt + "。")
+            ctx.check(cid, name, "found", count_txt + hand_txt + "。")
             return
-    ctx.check(cid, name, "ok", count_txt + f"，没有一根轴在大多数（≥ {_pct(r['dominant_share'])}）重刹段里先饱和。")
+    ctx.check(cid, name, "ok", count_txt + hand_txt + f"，没有一根轴在大多数（≥ {_pct(r['dominant_share'])}）重刹段里先饱和。")
 
 
 def _brake_bias_finding(ctx: _Ctx, axle: str, ev: list[dict], k: int, count_txt: str, rule_txt: str) -> dict:
@@ -1389,17 +1421,71 @@ def _coast_model(spd_ms: np.ndarray, decel: np.ndarray, mask: np.ndarray, min_n:
 
 
 def _speed_edges(speed: np.ndarray, quantiles, fixed) -> list[float]:
-    """车速分档边界（km/h）：配置里写了固定边界就用固定的，否则按这些采样车速的分位数分，去掉重复。"""
+    """车速分档边界（km/h）：配置里写了固定边界就用固定的，否则按这些采样车速的分位数分，去掉重复（相差 < 5 km/h）。
+
+    边界保留原始分位数值、不取整（显示文字由 _band_defs 格式化成整数）：取整会把正好落在分位数上的一大簇几乎恒定的车速
+    （全油门长弯、顶着断油的高速弯）整块推到另一档，那一档的结论就跟着变了。
+    """
     if fixed:
         return sorted(float(x) for x in fixed)
     if speed.size == 0:
         return []
-    edges = [round(float(np.quantile(speed, q))) for q in quantiles]
+    s = np.sort(np.asarray(speed, float))
     out: list[float] = []
-    for e in edges:
+    qs: list[float] = []
+    for q in quantiles:
+        e = float(np.quantile(s, q))
         if not out or e - out[-1] >= 5:
-            out.append(float(e))
-    return out
+            out.append(e)
+            qs.append(float(q))
+    return _rebalance_edges(s, out, qs)
+
+
+def _band_shares(s: np.ndarray, edges: list[float]) -> np.ndarray:
+    """每档的采样占比（和 _band_mask 一样按 ≥ 下界、< 上界切）。s 已排序。"""
+    cuts = np.concatenate([[0], np.searchsorted(s, edges, side="left"), [s.size]])
+    return np.diff(cuts) / max(1, s.size)
+
+
+def _rebalance_edges(s: np.ndarray, edges: list[float], qs: list[float]) -> list[float]:
+    """保护：某一档的采样占比不到预期（分位数之差）的一半——通常是大量完全相同的车速正好骑在边界上——
+    就把这一档两侧的边界挪到分位数附近最大的车速间隙中点（不劈开一簇车速）；挪完更均匀才采用。s 已排序。"""
+    if not edges or s.size < 2:
+        return edges
+    expect = np.diff(np.concatenate([[0.0], qs, [1.0]]))
+    if np.any(expect <= 0):
+        return edges
+
+    def worst(es: list[float]) -> tuple[float, int]:
+        ratio = _band_shares(s, es) / expect
+        return float(ratio.min()), int(ratio.argmin())
+
+    edges = list(edges)
+    for _ in range(len(edges)):
+        score, band = worst(edges)
+        if score >= 0.5:
+            break
+        best = None
+        for j in (band - 1, band):                 # 这一档的下边界、上边界
+            if not 0 <= j < len(edges):
+                continue
+            w = 0.5 * min(expect[j], expect[j + 1])   # 只在相邻两档各一半的范围里找，边界不会交叉
+            i0 = int(np.floor(max(0.0, qs[j] - w) * (s.size - 1)))
+            i1 = int(np.ceil(min(1.0, qs[j] + w) * (s.size - 1)))
+            if i1 <= i0:
+                continue
+            gaps = np.diff(s[i0:i1 + 1])
+            k = int(np.argmax(gaps))
+            if gaps[k] <= 0:
+                continue
+            cand = edges[:j] + [float((s[i0 + k] + s[i0 + k + 1]) / 2)] + edges[j + 1:]
+            sc = worst(cand)[0]
+            if sc > score and (best is None or sc > best[0]):
+                best = (sc, cand)
+        if best is None:
+            break
+        edges = best[1]
+    return edges
 
 
 def _band_defs(edges: list[float]) -> list[dict]:
@@ -1433,12 +1519,14 @@ def _pedal_samples(ctx: _Ctx) -> dict | None:
     decel = ctx.ch("g_long") * _decel_sign(ctx.ch("g_long"), brk)
     base = (steer < r["max_steer"]) & (thr <= r["max_throttle"]) & (spd * 3.6 > r["min_speed_kmh"]) \
         & ~_near_kerb(ctx, r["kerb_window_s"])
+    hands, hand_txt = _hands_off(ctx, base & (brk >= r["min_brake"]))   # 手刹也会产生减速度，这些采样不算
+    base &= hands
     coast = base & (brk <= r["coast_max_pedal"])
     model = _coast_model(spd, decel, coast, round(r["min_coast_s"] / ctx.dt))
     m = base & (brk >= r["min_brake"])
     net = decel - (model[0] + model[1] * spd ** 2 if model else 0.0)
     return {"dt": ctx.dt, "pedal": brk[m], "decel_g": net[m], "speed_kmh": spd[m] * 3.6, "coast": model,
-            "coast_s": float(coast.sum() * ctx.dt)}
+            "coast_s": float(coast.sum() * ctx.dt), "hand_txt": hand_txt}
 
 
 def _pedal_curves(sets: list[dict], r: dict) -> dict:
@@ -1498,7 +1586,8 @@ def _check_brake_pressure(ctx: _Ctx) -> None:
     if not evaluated:
         ctx.check(cid, name, "skipped",
                   f"数据不足：直线刹车时踏板位置太集中（每个车速档至少要 {r['min_bins']} 个 {_pct(r['pedal_bin'])} 宽的踏板区间、"
-                  f"每个区间 ≥ {r['min_bin_s']:.2f} s、跨度 ≥ {_pct(r['min_span'])}）——比如总是一脚踩到底，就看不出饱和点。")
+                  f"每个区间 ≥ {r['min_bin_s']:.2f} s、跨度 ≥ {_pct(r['min_span'])}）——比如总是一脚踩到底，就看不出饱和点"
+                  f"{ps['hand_txt']}。")
         return
     sat = [b for b in evaluated if b["status"] == "saturated"]
     parts = []
@@ -1509,7 +1598,7 @@ def _check_brake_pressure(ctx: _Ctx) -> None:
             parts.append(f"{b['name']}（{b['range']}）踩到 {_pct(b['sat_pedal'])} 后减速度不再增加（约 {b['sat_decel_g']:.2f} G）")
         else:
             parts.append(f"{b['name']}（{b['range']}）踩到 {_pct(b['max_pedal'])} 减速度还在增加")
-    note = "；".join(parts) + f"（{coast_txt}）"
+    note = "；".join(parts) + f"（{coast_txt}）" + ps["hand_txt"]
     if not sat:
         ctx.check(cid, name, "ok", note + f"。没有在 {_pct(r['sat_warn_pedal'])} 踏板以内就饱和的。")
         return
@@ -1531,7 +1620,7 @@ def _brake_pressure_finding(ctx: _Ctx, sat: list[dict], curves: dict, coast_txt:
                             "再往下踩减速度基本不变")
     evidence.append(coast_txt)
     evidence.append(f"判定阈值：直线（|方向盘| < {_pct(r['max_steer'])}、油门 ≤ {_pct(r['max_throttle'])}、车速 > {r['min_speed_kmh']:.0f} km/h、"
-                    f"没压路肩）刹车时，按 {_pct(r['pedal_bin'])} 踏板分区间取减速度中位数（每区间 ≥ {r['min_bin_s']:.2f} s）；"
+                    f"没压路肩、没拉手刹）刹车时，按 {_pct(r['pedal_bin'])} 踏板分区间取减速度中位数（每区间 ≥ {r['min_bin_s']:.2f} s）；"
                     f"从某个踏板位置起后面所有区间都 ≥ 最大值的 {_pct(r['sat_frac'])}、后面还有 ≥ {r['min_bins_above']} 个区间、"
                     f"最深踩到 ≥ {_pct(r['full_pedal'])}，这个位置 ≤ {_pct(r['sat_warn_pedal'])} 才报")
     if ctx.abs_on is True:
@@ -1588,6 +1677,13 @@ def _check_differential(ctx: _Ctx) -> None:
     # (a) 入弯松刹：弯心前、不踩油门也不踩刹车、在转弯 → 发动机制动经差速器作用在驱动轮上
     if ctx.corners:
         lift = (thr <= r["lift_max_throttle"]) & (brk <= r["lift_max_brake"]) & (glat >= r["min_lat_g"]) & ctx.speed_ok
+        entry_rng = np.zeros(ctx.n, bool)
+        for c in ctx.corners:
+            lo = min(c["brake_start_m"] if c.get("brake_start_m") is not None else c["start_m"], c["start_m"])
+            entry_rng |= (ctx.dist >= lo) & (ctx.dist < c["apex_m"])
+        # 拉手刹（后轮被手刹拖住）、踩离合（发动机制动传不到车轮）时的滑移和差速器无关
+        hands, hand_txt = _hands_off(ctx, lift & entry_rng, clutch=True)
+        lift &= hands
         inner_m = {ax: np.zeros(ctx.n, bool) for ax in axles}
         both_m = {ax: np.zeros(ctx.n, bool) for ax in axles}
         lift_entry = np.zeros(ctx.n, bool)
@@ -1607,7 +1703,7 @@ def _check_differential(ctx: _Ctx) -> None:
         lift_s = float(lift_entry.sum() * ctx.dt)
         if lift_s < r["min_lift_s"]:
             notes.append(f"入弯松刹（油门 ≤ {_pct(r['lift_max_throttle'])}、刹车 ≤ {_pct(r['lift_max_brake'])}、横向 G ≥ {r['min_lat_g']:.2f}）"
-                         f"只有 {lift_s:.1f} s，不判断减速锁止")
+                         f"只有 {lift_s:.1f} s{hand_txt}，不判断减速锁止")
         else:
             evaluated = True
             events = []
@@ -1626,10 +1722,10 @@ def _check_differential(ctx: _Ctx) -> None:
             mx = max(float(sr[w][lift_entry].max()) for ax in axles for w in AXLE_WHEELS[ax]) if lift_entry.any() else 0.0
             if events:
                 found = True
-                ctx.findings.append(_diff_decel_finding(ctx, sorted(events, key=lambda e: e["i0"]), lift_s))
-                notes.append(f"入弯松刹 {lift_s:.1f} s 里驱动轮滑移超限 {len(events)} 次")
+                ctx.findings.append(_diff_decel_finding(ctx, sorted(events, key=lambda e: e["i0"]), lift_s, hand_txt))
+                notes.append(f"入弯松刹 {lift_s:.1f} s{hand_txt} 里驱动轮滑移超限 {len(events)} 次")
             else:
-                notes.append(f"入弯松刹 {lift_s:.1f} s，驱动轮 |滑移率| 最大 {mx:.2f}，没超过 {r['slip_limit']:.2f}")
+                notes.append(f"入弯松刹 {lift_s:.1f} s{hand_txt}，驱动轮 |滑移率| 最大 {mx:.2f}，没超过 {r['slip_limit']:.2f}")
     else:
         notes.append("没识别出弯道，不判断入弯松刹时的内侧轮")
 
@@ -1659,7 +1755,7 @@ def _check_differential(ctx: _Ctx) -> None:
     ctx.check(cid, name, "found" if found else "ok", "；".join(notes) + "。出弯空转分内侧 / 外侧轮的判断见“驱动轮空转”。")
 
 
-def _diff_decel_finding(ctx: _Ctx, events: list[dict], lift_s: float) -> dict:
+def _diff_decel_finding(ctx: _Ctx, events: list[dict], lift_s: float, hand_txt: str = "") -> dict:
     r = ctx.r["differential"]
     inner = [e for e in events if e["kind"] == "inner"]
     corners = sorted({e["corner"]["name"] for e in events}, key=_corner_key)
@@ -1675,7 +1771,7 @@ def _diff_decel_finding(ctx: _Ctx, events: list[dict], lift_s: float) -> dict:
             evidence.append(f"{loc['label']}（{turn}，持续 {ctx.dur(e['i0'], e['i1']):.2f} s）：松刹车滑行入弯时"
                             f"{AXLE_CN[e['axle']]}两个驱动轮 |滑移率| 都超过 {r['slip_limit']:.2f}（最大 {e['peak']:.2f}）")
     evidence.append(f"判定阈值：弯心前、油门 ≤ {_pct(r['lift_max_throttle'])}、刹车 ≤ {_pct(r['lift_max_brake'])}、横向 G ≥ {r['min_lat_g']:.2f}"
-                    f"（本圈共 {lift_s:.1f} s）时，驱动轮 |滑移率| > {r['slip_limit']:.2f} 连续 ≥ {r['min_duration_s']:.2f} s；"
+                    f"、没拉手刹、没踩离合（本圈共 {lift_s:.1f} s{'，' + hand_txt[1:-1] if hand_txt else ''}）时，驱动轮 |滑移率| > {r['slip_limit']:.2f} 连续 ≥ {r['min_duration_s']:.2f} s；"
                     f"出现在 ≥ {r['alert_corners']} 个弯记为严重")
     if inner:
         sev = "alert" if len(corners) >= r["alert_corners"] else "warn"
@@ -1690,8 +1786,8 @@ def _diff_decel_finding(ctx: _Ctx, events: list[dict], lift_s: float) -> dict:
         summary = "松刹车滑行入弯时同一根驱动轴两个轮子都滑：发动机制动整体太大，和差速器左右分配关系不大。"
         tips = ["先排除驾驶：降挡别太早、别一次降好几挡", "差速器减速锁止率调低一点也能让车尾更容易跟着转，但解决不了发动机制动太大"]
     basis = {"channels": ["slip_ratio_*（归一化滑移率）", "throttle", "brake", "g_lat", "弯道方向（corners.direction，来自方向盘）",
-                          "meta.drivetrain（驱动轮）"],
-             "rule": "按弯道方向分出内侧 / 外侧驱动轮（右弯内侧 = 右侧轮），只看弯心前的松刹车滑行段。",
+                          "meta.drivetrain（驱动轮）", "handbrake / clutch（排除拉手刹、踩离合）"],
+             "rule": "按弯道方向分出内侧 / 外侧驱动轮（右弯内侧 = 右侧轮），只看弯心前的松刹车滑行段（拉手刹、踩离合的采样不算）。",
              "principle": ("松油时发动机制动通过差速器分给左右驱动轮。差速器越“开放”，两边分到的制动力越接近，"
                            "过弯时内侧轮载荷小，先被拖到极限；减速锁止率越高，左右轮被约束得越紧，内侧轮越不容易单独滑。"
                            "两个轮子一起滑则说明发动机制动本身太大。")}

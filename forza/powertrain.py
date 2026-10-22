@@ -95,6 +95,8 @@ POWER_LAPS = 40               # 功率曲线最多用最近这么多圈
 ACTUAL_LAPS = 10              # 实际升挡转速用最近这么多圈
 INTERP_MAX_GAP = 300          # 功率曲线分箱之间缺口 ≤ 这么多 rpm 才插值
 REDLINE_COVER = 300           # 功率数据覆盖到离红线这么近，才敢说“不交叉 = 在红线换”
+REDLINE_SHIFT_FRAC = LIMITER_FRAC   # “在红线换”的换挡点 = 最高转速 × 98%：断油器在最高转速以下来回跳，
+                                    # 正好等于最高转速的转速几乎到不了；交点高于这个的也按红线换（98% 也是“撞断油”的判据）
 SHIFT_SCAN_STEP = 10          # 找交点的转速步长
 BACKFILL_LAPS = 40            # 第一次查某台车时，最多给最近这么多圈补算
 
@@ -428,6 +430,8 @@ def shift_points(curve: list[dict], ratios: dict[int, float], redline: float | N
     g 挡转速 x 升到 g+1 挡后转速 = x·k，k = R(g+1)/R(g)。同车速下轮上驱动力 ∝ 功率，
     所以从低往高扫，第一个 P(x) < P(x·k) 的点（线性插值到交点）就是升挡点；
     在有数据的范围里一直不交叉、且数据覆盖到红线附近 → 在红线换。只在实测覆盖的转速内判断，不外推。
+    “在红线换”给的转速是 红线 × REDLINE_SHIFT_FRAC（断油器在红线以下来回跳，正好等于红线的转速到不了，
+    换挡灯按 ≥ shift_rpm 闪红就永远不闪）；交点高于这个转速的同样夹到这里，shift_how 记成 redline。
     """
     notes: list[str] = []
     out: dict = {}
@@ -438,6 +442,8 @@ def shift_points(curve: list[dict], ratios: dict[int, float], redline: float | N
     lo_cov = min(xs[0] for xs, _ in segs) - RPM_BIN / 2
     top_cov = max(xs[-1] for xs, _ in segs) + RPM_BIN / 2
     red = float(redline or 0) or top_cov
+    cap = int(round(red * REDLINE_SHIFT_FRAC))
+    clamped: list[str] = []
     for g in sorted(ratios):
         if g + 1 not in ratios:
             continue
@@ -460,15 +466,22 @@ def shift_points(curve: list[dict], ratios: dict[int, float], redline: float | N
             if d0 >= 0 > d1:
                 found = x0 + (x1 - x0) * d0 / (d0 - d1)
                 break
-        if found is not None:
+        if found is not None and found < cap:
             out[str(g)], how[str(g)] = int(round(found)), "cross"
+        elif found is not None:
+            out[str(g)], how[str(g)] = cap, "redline"
+            clamped.append(f"{g} 挡（交点 {int(round(found))}）")
         elif pts[-1][1] >= 0 and pts[-1][0] >= red - REDLINE_COVER:
-            out[str(g)], how[str(g)] = int(round(red)), "redline"
+            out[str(g)], how[str(g)] = cap, "redline"
         elif all(d < 0 for _, d in pts):
             notes.append(f"{g} 挡：在有数据的转速里升挡后都更有劲，最佳升挡点在 {int(pts[0][0])} rpm 以下，"
                          "低转速段数据不够，没法确定")
         else:
             notes.append(f"{g} 挡：实测功率没覆盖到红线附近（只到 {int(pts[-1][0])} rpm），没法确定是不是该在红线换")
+    if any(h == "redline" for h in how.values()):
+        notes.append(f"标“红线”的挡位换挡点给的是 {cap} rpm（最高转速的 {REDLINE_SHIFT_FRAC:.0%}）：断油器在最高转速以下"
+                     "来回跳，转速基本到不了最高转速，换挡灯要在撞断油之前亮"
+                     + (f"；{'、'.join(clamped)}贴着断油，也按红线换" if clamped else ""))
     return out, how, notes
 
 

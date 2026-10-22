@@ -78,13 +78,39 @@ def test_power_curve_and_shift_points(short_gears):
         assert p["power_kw"] == pytest.approx(true_kw, rel=0.03)
     assert s["peak_power"]["power_kw"] == pytest.approx(car["power_kw"], rel=0.02)
     assert 6800 <= s["peak_power"]["rpm"] <= 7300
-    # 换挡点：和真实曲线算出来的差 < 80 rpm；1、2 挡曲线不交叉 → 在红线换
+    # 换挡点：和真实曲线算出来的差 < 80 rpm；1、2 挡曲线不交叉 → 在红线换。
+    # “在红线换”给的是最高转速的 98%（断油器在最高转速以下来回跳，正好等于最高转速到不了），
+    # 交点高于这个的（3 挡约 7982）也夹到这里
+    cap = round(car["engine_max_rpm"] * pt.REDLINE_SHIFT_FRAC)
     expect = _true_shift(car["gear_ratios"], car["engine_max_rpm"])
     assert set(s["shift_rpm"]) == set(expect)          # 6 挡是最高挡，不给升挡点
     for g, x in expect.items():
-        assert s["shift_rpm"][g] == pytest.approx(x, abs=80), g
-    assert s["shift_how"]["1"] == "redline" and s["shift_how"]["4"] == "cross"
+        assert s["shift_rpm"][g] == pytest.approx(min(x, cap), abs=80), g
+        assert s["shift_rpm"][g] <= cap
+        assert s["shift_how"][g] == ("redline" if s["shift_rpm"][g] == cap else "cross"), g
+    assert s["shift_how"]["1"] == "redline" and s["shift_rpm"]["1"] == cap and s["shift_how"]["4"] == "cross"
     assert all(isinstance(k, str) for k in s["shift_rpm"])
+    assert any("最高转速的 98%" in n for n in s["notes"])
+
+
+def test_redline_shift_points_are_reachable(short_gears):
+    """换挡灯按 rpm ≥ shift_rpm 闪红：红线型换挡点必须是撞断油时真的能到的转速（不能正好等于最高转速）。"""
+    store, truth, _ = short_gears
+    car = truth["car"]
+    s = pt.summary(store, "fm2023", car["car_ordinal"])
+    top = len(car["gear_ratios"])
+    lim = []                                            # 6 挡撞断油时的转速（实时面板收到的是取整后的）
+    for m in store.list_laps(limit=100):
+        lap = store.get_lap(m["id"])
+        g = np.round(lap["gear"]).astype(int)
+        r = np.round(lap["rpm"])
+        lim.extend(r[(g == top) & (r >= car["engine_max_rpm"] * 0.98)].tolist())
+    assert len(lim) > 100
+    for g, how in s["shift_how"].items():
+        if how == "redline":
+            # 撞着断油的采样几乎全都 ≥ 换挡点（而 ≥ 最高转速的只有个别几帧）
+            assert np.mean(np.array(lim) >= s["shift_rpm"][g]) > 0.99, g
+    assert np.mean(np.array(lim) >= car["engine_max_rpm"]) < 0.05
 
 
 def test_actual_upshifts(short_gears):

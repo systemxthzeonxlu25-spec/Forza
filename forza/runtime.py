@@ -58,7 +58,8 @@ class Runtime:
                 datetime.now().strftime("%Y%m%d_%H%M%S") + ".frec")
             recorder = Recorder(path, meta={"source": f"udp:{cfg.udp_host}:{cfg.udp_port}", "game": cfg.game})
         source = f"replay:{Path(replay).name}" if replay else f"udp:{cfg.udp_port}"
-        ring_s = max(0.0, float(cfg.record_buffer_minutes or 0)) * 60.0
+        # 回放模式下“保存刚才 N 分钟”是禁用的（数据本来就来自录像），不开环形缓冲，省得白占内存
+        ring_s = 0.0 if replay else max(0.0, float(cfg.record_buffer_minutes or 0)) * 60.0
         self.hub = Hub(cfg.game, recorder, cfg.forward, source, ring_seconds=ring_s)
         self.last_snapshot: dict | None = None     # 最近一次“保存刚才 N 分钟”的结果
 

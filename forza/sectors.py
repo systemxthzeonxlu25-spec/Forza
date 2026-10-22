@@ -40,6 +40,8 @@ OUTLIER_RATIO = 0.20          # 某段用时偏离这段中位数超过 20% 就�
 MIN_LAPS_FOR_STD = 3          # 至少这么多圈才算标准差、挑“最不稳”的段
 REMAP_RADIUS_M = 60.0         # 重算弯道表时，新弯心离旧弯心这么近就沿用旧名字
 LAYOUT_LENGTH_TOL = 0.10      # 圈长和弯道表的圈长差超过 10%（没跑完 / 不是同一条路线）就不套用固定表
+APEX_SEARCH_M = 200.0         # 按弯心坐标在本圈找弯：只在预计位置前后这么远内找（免得找到别处路过的同一个点）
+APEX_MATCH_M = 40.0           # 本圈轨迹离表里的弯心坐标最近也超过这么远 = 没找到，用预计位置
 NAME_MAX_LEN = 30
 EXCLUDE_FLAGS = {"rewind": "倒过带", "abandoned": "中途放弃"}
 
@@ -218,6 +220,8 @@ def rebuild_layout(store, track_id: int, lap_id: int | None = None) -> tuple[dic
         raise ValueError(f"圈 #{lap_id} 不存在")
     if lap.meta.get("track_id") != track_id:
         raise ValueError(f"圈 #{lap_id} 不在这条赛道上")
+    if _standing_first_lap(lap.meta):
+        raise ValueError(f"圈 #{lap_id} 是发车格起步的第一圈，距离从线后算起，和飞驰圈对不上，不能用来生成弯道表")
     new = build_layout(lap)
     old = get_layout(store, track_id)
     kept: list[dict] = []
@@ -275,33 +279,97 @@ def rename_corner(store, track_id: int, code: str, name: str | None) -> dict:
 
 # ================================================================ 映射到某一圈
 
+def _standing_first_lap(meta: dict) -> bool:
+    """赛道赛的第一圈：从起终点线后的发车格起步，距离从发车格算起（冲刺赛每次都这样，表本身就是这么来的，不算）。"""
+    return "first_lap" in (meta.get("flags") or []) and meta.get("kind") != "sprint"
+
+
+def _has_xy(rs: dict) -> bool:
+    """重采样后的坐标能不能用（有通道、没有 NaN、不是全 0）。"""
+    if "pos_x" not in rs or "pos_z" not in rs:
+        return False
+    x, z = rs["pos_x"], rs["pos_z"]
+    return bool(np.isfinite(x).all() and np.isfinite(z).all() and np.ptp(x) + np.ptp(z) >= 1.0)
+
+
+def _locate_apexes(rs: dict, corners: list[dict], expected: list[float]) -> list[float] | None:
+    """按表里的弯心坐标在本圈轨迹上找各弯弯心的距离（1 m 网格）。
+
+    每个弯只在预计位置 ±APEX_SEARCH_M 里找离弯心坐标最近的点；最近点也超过 APEX_MATCH_M 的弯用预计位置。
+    本圈或表里没有坐标 → None。找出来的顺序乱了（不该发生）→ None，调用方退回预计位置。
+    """
+    if not _has_xy(rs):
+        return None
+    pts = [(c.get("apex_x"), c.get("apex_z")) for c in corners]
+    if any(x is None or z is None for x, z in pts):
+        return None
+    xs, zs = np.array([p[0] for p in pts], float), np.array([p[1] for p in pts], float)
+    if np.ptp(xs) + np.ptp(zs) < 1.0:                  # 表里坐标全一样（录的时候没坐标）
+        return None
+    n = len(rs["dist"])
+    out = []
+    for (ax, az), exp in zip(pts, expected):
+        lo = int(max(0, math.floor(exp - APEX_SEARCH_M)))
+        hi = int(min(n - 1, math.ceil(exp + APEX_SEARCH_M)))
+        if hi <= lo:
+            out.append(exp)
+            continue
+        dd = np.hypot(rs["pos_x"][lo:hi + 1] - ax, rs["pos_z"][lo:hi + 1] - az)
+        k = int(np.argmin(dd))
+        out.append(float(rs["dist"][lo + k]) if dd[k] <= APEX_MATCH_M else exp)
+    if any(b <= a for a, b in zip(out, out[1:])):
+        return None
+    return out
+
+
 def layout_corners(store, lap: LapData) -> list[dict] | None:
-    """把这条赛道保存的固定弯道表映射到这圈自己的距离（按圈长比例缩放）。
+    """把这条赛道保存的固定弯道表映射到这圈自己的距离。
+
+    映射方法：先按位置预计每个弯的弯心（飞驰圈按圈长比例缩放；发车格起步的第一圈 = 表里的距离 + 发车格偏移，
+    偏移 = 这圈圈长 − 表的圈长，因为多出来的那段全在过线之前），再按表里存的弯心坐标在预计位置附近找本圈
+    离它最近的点当弯心；弯起点 / 终点按表里和弯心的相对距离放。没有坐标时就用预计位置。
 
     字段同 corners.detect_corners：name（= 编号 T1…，固定不变）, index, start_m, apex_m, end_m, direction,
     min_speed（本圈 m/s）, min_radius_m, heading_change_deg, brake_start_m / full_throttle_m（本圈，可能为 None），
-    另加 code（同 name）, label（显示名，可能被用户改过）, sector_start_m / sector_end_m（这个弯所在分段的范围）。
+    另加 code（同 name）, label（显示名，可能被用户改过）, sector_start_m / sector_end_m（这个弯所在分段的范围：
+    相邻两弯之间直道的中点，第一段从 0 开始，最后一段到圈长）。
     没有保存的表 / 这圈没有 track_id / 数据太少 / 圈长和表差超过 LAYOUT_LENGTH_TOL（没跑完）→ None。
     """
     tid = lap.meta.get("track_id")
     if tid is None or len(lap) < 10 or not lap.has("dist"):
         return None
     layout = get_layout(store, tid)
-    if layout is None:
+    if layout is None or not layout["corners"]:
         return None
     L = _lap_length(lap)
     ref_len = layout.get("length_m") or 0.0
     if L <= 0 or (ref_len > 0 and abs(L - ref_len) / ref_len > LAYOUT_LENGTH_TOL):
         return None
-    rs = resample_by_distance(lap, 1.0, ["speed", "brake", "throttle"], length=L)
+    if _standing_first_lap(lap.meta) and ref_len > 0:
+        scale, shift = ref_len, L - ref_len            # 第一圈：整体平移（发车格到线的那段），不拉伸
+    else:
+        scale, shift = L, 0.0                          # 飞驰圈：走线不同造成的长短差摊到全圈
+    rs = resample_by_distance(lap, 1.0, ["speed", "brake", "throttle", "pos_x", "pos_z"], length=L)
     for ch in ("speed", "brake", "throttle"):
         if ch not in rs:
             rs[ch] = np.full_like(rs["dist"], np.nan)
     n = len(rs["dist"])
-    sec = {s["code"]: s for s in layout["sectors"]}
+    cs = layout["corners"]
+    expected = [c["apex_frac"] * scale + shift for c in cs]
+    apexes = _locate_apexes(rs, cs, expected) or expected
+
+    def clip(x: float) -> float:
+        return float(min(L, max(0.0, x)))
+
+    spans = []
+    for c, apex in zip(cs, apexes):
+        start = clip(apex + (c["start_frac"] - c["apex_frac"]) * scale)
+        end = clip(apex + (c["end_frac"] - c["apex_frac"]) * scale)
+        spans.append((start, clip(apex), end))
+    bounds = [0.0] + [(p[2] + q[0]) / 2 for p, q in zip(spans, spans[1:])] + [L]
+
     out = []
-    for c in layout["corners"]:
-        start, apex, end = c["start_frac"] * L, c["apex_frac"] * L, c["end_frac"] * L
+    for i, (c, (start, apex, end)) in enumerate(zip(cs, spans)):
         a, ap, b = (int(min(n - 1, max(0, round(x)))) for x in (start, apex, end))
         v = rs["speed"][a:b + 1]
         vmin = float(np.nanmin(v)) if len(v) and np.isfinite(v).any() else None
@@ -310,14 +378,13 @@ def layout_corners(store, lap: LapData) -> list[dict] | None:
             brake_start = _find_brake_start(rs, a, ap, 1.0)
         if np.isfinite(rs["throttle"]).all():
             full_thr = _find_full_throttle(rs, ap, 1.0)
-        s = sec.get(c["code"], {"start_frac": c["start_frac"], "end_frac": c["end_frac"]})
         out.append({
             "name": c["code"], "code": c["code"], "label": c["name"], "index": c["index"],
             "direction": c["direction"], "start_m": start, "apex_m": apex, "end_m": end,
             "min_speed": vmin, "min_radius_m": c.get("min_radius_m"),
             "heading_change_deg": c.get("heading_change_deg"),
             "brake_start_m": brake_start, "full_throttle_m": full_thr,
-            "sector_start_m": s["start_frac"] * L, "sector_end_m": s["end_frac"] * L,
+            "sector_start_m": bounds[i], "sector_end_m": bounds[i + 1],
         })
     return out
 

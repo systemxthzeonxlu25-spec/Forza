@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     start_x       REAL,
     start_z       REAL,
     ref_length_m  REAL,                   -- 参考圈长 / 路线长度
-    created_at    TEXT
+    created_at    TEXT,
+    provisional_length_m REAL             -- 只有起步圈时的暂定圈长（起步圈里最短的），有了 ref_length_m 就不用它
 );
 CREATE TABLE IF NOT EXISTS sessions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +99,7 @@ _META_SELECT = (
 # 赛道指纹匹配阈值
 TRACK_START_RADIUS_M = 60.0   # 起点坐标相距这么近算同一个起点
 TRACK_LENGTH_TOL = 0.04       # 圈长差在 4% 以内算同一条赛道（区分共用起点线的不同布局）
+TRACK_FIRST_LAP_MAX_EXTRA = 0.15   # 站立起步的第一圈最多比飞驰圈长这么多（发车格在起终点线后面，只会更长）
 CIRCUIT_REF_RECENT = 20       # 赛道参考圈长取最近这么多圈飞驰圈的中位数
 
 
@@ -117,7 +119,19 @@ class Store:
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.executescript(SCHEMA)
+            self._migrate()
             self._db.commit()
+
+    def _migrate(self) -> None:
+        """老库补列。tracks.provisional_length_m：只存过起步圈的赛道，用已存起步圈里最短的距离补上暂定圈长。"""
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(tracks)").fetchall()}
+        if "provisional_length_m" not in cols:
+            self._db.execute("ALTER TABLE tracks ADD COLUMN provisional_length_m REAL")
+            self._db.execute(
+                """UPDATE tracks SET provisional_length_m = (
+                       SELECT MIN(l.distance_m) FROM laps l
+                       WHERE l.track_id = tracks.id AND l.kind = 'lap' AND l.distance_m > 0)
+                   WHERE kind = 'circuit' AND ref_length_m IS NULL AND track_ordinal IS NULL""")
 
     def close(self) -> None:
         self._db.close()
@@ -166,47 +180,83 @@ class Store:
         return [dict(r) for r in self._q("SELECT * FROM cars ORDER BY first_seen DESC")]
 
     # ---------------- 赛道 ----------------
+    @staticmethod
+    def _circuit_length_score(r, length_m: float, first_lap: bool) -> tuple[int, float] | None:
+        """赛道赛按圈长判断候选赛道 r 像不像这一圈：像 → (优先级, 圈长相对差)，越小越像；不像 → None。
+
+        - 有参考圈长 ref（飞驰圈定的）：飞驰圈要求差 ≤ TRACK_LENGTH_TOL；
+          起步圈只会更长（发车格在线后），要求 ref×(1−TOL) ≤ 圈长 ≤ ref×(1+TRACK_FIRST_LAP_MAX_EXTRA)
+        - 只有暂定圈长 p（只存过起步圈，p = 其中最短的）：飞驰圈要求 p×(1−EXTRA) ≤ 圈长 ≤ p×(1+TOL)；
+          起步圈之间发车位置不同，要求 p÷(1+EXTRA) ≤ 圈长 ≤ p×(1+EXTRA)
+        - 两个都没有（老库里圈都删了的赛道）：不看圈长，优先级最低
+        """
+        ref, prov = r["ref_length_m"], r["provisional_length_m"]
+        tol, extra = TRACK_LENGTH_TOL, TRACK_FIRST_LAP_MAX_EXTRA
+        if ref:
+            ok = (ref * (1 - tol) <= length_m <= ref * (1 + extra)) if first_lap else abs(length_m - ref) <= ref * tol
+            return (0, abs(length_m - ref) / ref) if ok else None
+        if prov:
+            ok = (prov / (1 + extra) <= length_m <= prov * (1 + extra)) if first_lap \
+                else (prov * (1 - extra) <= length_m <= prov * (1 + tol))
+            return (1, abs(length_m - prov) / prov) if ok else None
+        return (2, 0.0)
+
+    def find_track(self, *, family: str, kind: str, track_ordinal: int | None, start_x: float, start_z: float,
+                   length_m: float | None, first_lap: bool = False) -> int | None:
+        """按 find_or_create_track 的规则找已有赛道，找不到返回 None（只查不建）。"""
+        with self._lock:
+            if track_ordinal:
+                rows = self._q("SELECT id FROM tracks WHERE family=? AND track_ordinal=? AND kind=? ORDER BY id",
+                               (family, track_ordinal, kind))
+                return rows[0]["id"] if rows else None
+            rows = self._q("SELECT * FROM tracks WHERE family=? AND kind=? AND track_ordinal IS NULL ORDER BY id",
+                           (family, kind))
+            cands = [r for r in rows if r["start_x"] is not None and r["start_z"] is not None
+                     and math.hypot(r["start_x"] - start_x, r["start_z"] - start_z) <= TRACK_START_RADIUS_M]
+            if not cands:
+                return None
+            if kind != "circuit" or not length_m or length_m <= 0:
+                return cands[0]["id"]
+            scored = []
+            for r in cands:
+                sc = self._circuit_length_score(r, float(length_m), first_lap)
+                if sc is not None:
+                    # 起步圈取圈长最接近的；飞驰圈在同一优先级里取最早建的（和以前一样）
+                    scored.append(((sc[0], sc[1] if first_lap else 0.0, r["id"]), r))
+            return min(scored, key=lambda e: e[0])[1]["id"] if scored else None
+
     def find_or_create_track(self, *, family: str, game: str, kind: str, track_ordinal: int | None,
                              start_x: float, start_z: float, length_m: float | None,
                              first_lap: bool = False) -> int:
         """找到（或新建）这一圈所在的赛道，返回 track id。
 
         - 有 TrackOrdinal（FM2023）：按 ordinal 识别
-        - 否则按起点坐标（相距 < 60 m）+ 圈长（差 < 4%）识别；冲刺赛只看起点
-        - first_lap=True（站立起步的第一圈）：发车格在线后，这圈可能比飞驰圈长好几个百分点，
-          所以不看圈长差；起点半径内有多条赛道（共用起终点线的不同布局）时取参考圈长最接近的。
-          新建赛道时也不拿它当参考圈长（ref_length_m 先空着，等飞驰圈来了再定，见 refresh_circuit_length）
+        - 否则按起点坐标（相距 < 60 m）+ 圈长识别（规则见 _circuit_length_score）；冲刺赛只看起点
+        - first_lap=True（站立起步的第一圈）：发车格在线后，这圈只会比飞驰圈长，最多长 TRACK_FIRST_LAP_MAX_EXTRA。
+          新建赛道时不拿它当参考圈长（ref_length_m 先空着，等飞驰圈来了再定，见 refresh_circuit_length），
+          只记成暂定圈长 provisional_length_m，免得别的布局的飞驰圈不看圈长就并进来
         """
         with self._lock:
-            if track_ordinal:
-                rows = self._q("SELECT id FROM tracks WHERE family=? AND track_ordinal=? AND kind=?",
-                               (family, track_ordinal, kind))
-                if rows:
-                    return rows[0]["id"]
-            else:
-                rows = self._q("SELECT * FROM tracks WHERE family=? AND kind=? AND track_ordinal IS NULL ORDER BY id",
-                               (family, kind))
-                cands = [r for r in rows if r["start_x"] is not None
-                         and math.hypot(r["start_x"] - start_x, r["start_z"] - start_z) <= TRACK_START_RADIUS_M]
-                if kind == "circuit" and first_lap and cands:
-                    with_len = [r for r in cands if r["ref_length_m"]]
-                    if with_len and length_m:
-                        return min(with_len, key=lambda r: (abs(r["ref_length_m"] - length_m), r["id"]))["id"]
-                    return cands[0]["id"]
-                for r in cands:
-                    if kind == "circuit" and length_m and r["ref_length_m"]:
-                        if abs(r["ref_length_m"] - length_m) / r["ref_length_m"] > TRACK_LENGTH_TOL:
-                            continue
-                    return r["id"]
+            tid = self.find_track(family=family, kind=kind, track_ordinal=track_ordinal, start_x=start_x,
+                                  start_z=start_z, length_m=length_m, first_lap=first_lap)
+            provisional = kind == "circuit" and first_lap and not track_ordinal and bool(length_m and length_m > 0)
+            if tid is not None:
+                if provisional:
+                    # 暂定圈长取起步圈里最短的（发车位置越靠前越接近真实圈长）
+                    self._x("UPDATE tracks SET provisional_length_m = MIN(COALESCE(provisional_length_m, ?), ?) "
+                            "WHERE id=? AND ref_length_m IS NULL", (length_m, length_m, tid))
+                return tid
             n = self._q("SELECT COUNT(*) AS c FROM tracks WHERE kind=?", (kind,))[0]["c"] + 1
             default_name = f"{'赛道' if kind == 'circuit' else '冲刺路线'} {n}"
             if track_ordinal:
                 default_name = f"赛道 #{track_ordinal}"
             ref = None if (kind == "circuit" and first_lap) else length_m
             return self._x(
-                """INSERT INTO tracks (family, game, track_ordinal, kind, name, start_x, start_z, ref_length_m, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)""",
-                (family, game, track_ordinal, kind, default_name, start_x, start_z, ref, _now()),
+                """INSERT INTO tracks (family, game, track_ordinal, kind, name, start_x, start_z, ref_length_m,
+                                      provisional_length_m, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (family, game, track_ordinal, kind, default_name, start_x, start_z, ref,
+                 length_m if provisional else None, _now()),
             )
 
     def update_track_length(self, track_id: int, length_m: float) -> None:

@@ -172,9 +172,12 @@ def test_snapshot(client, rt, cfg):
 def test_snapshot_disabled_in_replay(cfg, tmp_path):
     rt = Runtime(cfg, replay=str(tmp_path / "x.frec"))
     try:
+        assert cfg.record_buffer_minutes > 0
+        assert rt.hub.ring is None              # 快照用不了，就不开环形缓冲（尽快回放时会白占上百 MB）
         with TestClient(create_app(rt)) as c:
             st = c.get("/api/record/status").json()
             assert st["replay"] is True and "回放" in st["snapshot_disabled"]
+            assert st["buffer_minutes"] == 0 and st["buffer_packets"] == 0
             r = c.post("/api/record/snapshot", json={"minutes": 1})
             assert r.status_code == 400 and "回放" in r.json()["detail"]
     finally:

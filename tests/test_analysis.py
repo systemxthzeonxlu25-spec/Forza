@@ -258,6 +258,32 @@ def test_clutch_in_is_not_coasting(demo):
     assert _seg(compare(ref, _modified(ref, coast_clutch)), "T4")["coast_pre_other_s"] == 0.0
 
 
+def test_coast_hysteresis_on_maintenance_throttle(demo):
+    """维持油门 4% 对 6%、0% 对 3% 这种擦边差别不出“滑行”句子；真的松开（0%）对维持油门（8%）才说。"""
+    _, laps = demo
+    ref = laps[3]
+    apex = _seg(compare(ref, ref), "T6")["apex_m"]
+
+    def hold(level):
+        def fn(ch):
+            m = _win(ch, apex - 40, apex + 40)
+            ch["throttle"][m] = level
+            ch["brake"][m] = 0.0
+        return fn
+
+    def coast_clauses(a, b):
+        res = compare(_modified(ref, hold(a)), _modified(ref, hold(b)))
+        return [c for s in res["segments"] for c in s["clauses"] if "滑行" in c]
+
+    assert coast_clauses(0.04, 0.06) == [] and coast_clauses(0.06, 0.04) == []
+    assert coast_clauses(0.03, 0.0) == [] and coast_clauses(0.0, 0.03) == []
+    assert coast_clauses(12 / 255, 13 / 255) == []
+    more = coast_clauses(0.08, 0.0)                 # 这圈松开滑行，参考圈维持 8% 油门
+    assert more and "参考圈 0.0 s" in more[0]
+    less = coast_clauses(0.0, 0.08)                 # 反过来：参考圈滑行
+    assert less and "滑行 0.0 s" in less[0]
+
+
 # ---------------------------------------------------------------- 两圈走线 / 横向偏移 / 可选曲线 / 固定弯道表
 
 def _shift_right(lap: LapData, meters: float) -> LapData:

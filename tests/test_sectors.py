@@ -108,6 +108,51 @@ def test_layout_corners_mapped_to_lap(store):
     assert sectors.layout_corners(store, short) is None
 
 
+def _corner_spots(res) -> set[tuple[str, str]]:
+    """诊断结果里落在某个弯上的 (问题 id, 弯编号)。"""
+    return {(f["id"], l["corner"]) for f in res["findings"] for l in (f.get("locations") or []) if l.get("corner")}
+
+
+def test_layout_corners_grid_offset(tmp_path):
+    """发车格在线后 150 m：第一圈的距离是整体平移，不是等比拉长。按弯心坐标映射后，
+    第一圈每个弯的位置都要和本圈自己识别的一致，诊断结论也一样（不能把 T5 出弯的问题丢掉 / 挪到直道上）。"""
+    from forza import tuning
+    rec = tmp_path / "grid.frec"
+    write_fake_recording(rec, "fm2023_dash", laps=3, seed=7, grid_offset_m=150)
+    st = _import(rec, tmp_path / "g.db")
+    metas = sorted(st.list_laps(), key=lambda m: m["id"])
+    first = st.get_lap(metas[0]["id"])
+    assert "first_lap" in first.meta["flags"]
+    lay = sectors.ensure_layout(st, metas[0]["track_id"])
+    assert lay["source_lap_id"] != first.meta["id"]
+    assert abs(sectors._lap_length(first) - lay["length_m"]) == pytest.approx(150, abs=10)   # 在容差内，照样套表
+
+    own = detect_corners(first)
+    nopos = LapData(meta=first.meta, ch={k: v for k, v in first.ch.items() if k not in ("pos_x", "pos_z")})
+    for lap in (first, nopos):                       # 有坐标：按坐标找弯心；没坐标：按“表 + 发车格偏移”预计
+        cs = sectors.layout_corners(st, lap)
+        assert [c["name"] for c in cs] == [o["name"] for o in own]
+        for c, o in zip(cs, own):
+            assert c["apex_m"] == pytest.approx(o["apex_m"], abs=8), c["name"]
+            assert c["start_m"] == pytest.approx(o["start_m"], abs=15) and c["end_m"] == pytest.approx(o["end_m"], abs=15)
+            assert c["sector_start_m"] <= c["start_m"] < c["apex_m"] < c["end_m"] <= c["sector_end_m"]
+        assert cs[0]["sector_start_m"] == 0 and cs[-1]["sector_end_m"] == pytest.approx(sectors._lap_length(first))
+    # 飞驰圈照样对得上
+    fly = st.get_lap(metas[1]["id"])
+    for c, o in zip(sectors.layout_corners(st, fly), detect_corners(fly)):
+        assert c["apex_m"] == pytest.approx(o["apex_m"], abs=8)
+    # 诊断：用固定表和本圈自己识别，落在各弯上的结论一样（埋好的 T5 出弯甩尾在里面）
+    with_layout = tuning.diagnose(first, corners=sectors.layout_corners(st, first))
+    assert with_layout["summary"]["corner_source"] == "layout"
+    spots = _corner_spots(with_layout)
+    assert ("oversteer_exit", "T5") in spots
+    assert spots == _corner_spots(tuning.diagnose(first))
+    # 第一圈不能拿来生成弯道表
+    with pytest.raises(ValueError, match="第一圈"):
+        sectors.rebuild_layout(st, metas[0]["track_id"], first.meta["id"])
+    st.close()
+
+
 # ---------------------------------------------------------------- 理论最佳 / 稳定性
 
 def test_theoretical_best_and_consistency(store, template):

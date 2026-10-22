@@ -122,13 +122,14 @@ def test_summary_survives_compare_crash(rt, monkeypatch):
         raise KeyError("对比模块改坏了")
     monkeypatch.setattr(analysis, "compare", broken)
     s = CircleStream()
-    for f in s.run_dist(s.lap_len * 2.5):
+    for f in s.run_dist(s.lap_len * 3.5):     # 3 圈：第 3 圈的参考圈是飞驰圈（和起步圈比不跑 compare）
         rt.hub.feed(encode(f, "fm2023_dash"))
     rt.detector.flush()
     _settle(rt)
     last = rt.live.last_summary
     assert last is not None and last["id"] == rt.saver.saved_ids[-1]
-    assert last["ref"] is not None and "对比出错" in last["summary"] and last["top"] == []
+    assert last["ref"] is not None and last["ref"]["first_lap"] is False
+    assert "对比出错" in last["summary"] and last["top"] == []
 
 
 def test_summaries_api(rt):
@@ -192,3 +193,53 @@ def test_pre_save_hook_tags_meta(rt, monkeypatch):
     laps = rt.store.list_laps()
     assert len(laps) == 2 and all(l["setup_id"] == 3 and l["setup_name"] == "后防倾杆 -2" for l in laps)
     assert rt.live.last_summary["setup_name"] == "后防倾杆 -2"
+
+
+@pytest.fixture(scope="module")
+def grid_rec(tmp_path_factory):
+    """发车格在起点线后 150 m：起步圈比飞驰圈长，按圈长等比例缩放后每个弯都会错位。"""
+    p = tmp_path_factory.mktemp("grid") / "grid.frec"
+    truth = write_fake_recording(p, "fm7_dash", laps=4, seed=1, grid_offset_m=150)
+    return p, truth
+
+
+def test_first_lap_summary_has_no_corner_analysis(rt, grid_rec):
+    """本圈或参考圈是起步圈：只报总差距（圈时直接相减），不列逐弯解释，summary 里也不点弯名。"""
+    import re
+
+    path, _ = grid_rec
+    import_file(path, rt.hub)            # 第一场：新赛道，第 2 圈的参考圈只能是起步圈
+    rt.detector.flush()
+    _settle(rt)
+    import_file(path, rt.hub)            # 第二场：起步圈有飞驰圈当参考
+    rt.detector.flush()
+    _settle(rt)
+    items = list(reversed(rt.live.recent_summaries()))     # 按存档顺序
+    assert len(items) == 8
+    s1, s2 = items[:4], items[4:]
+
+    # 第一场第 2 圈（lap_number=1）：参考圈是第一场的起步圈
+    ref_first = s1[1]
+    assert ref_first["first_lap"] is False and ref_first["ref"]["first_lap"] is True
+    assert ref_first["ref"]["id"] == s1[0]["id"]
+    assert ref_first["top"] == []
+    assert ref_first["lap_time_delta_s"] == pytest.approx(ref_first["lap_time"] - s1[0]["lap_time"], abs=2e-3)
+    assert ref_first["lap_time_delta_s"] < -3                     # 飞驰圈比起步圈快好几秒
+    assert ref_first["summary"].startswith("比参考圈快") and "起步圈" in ref_first["summary"]
+    assert not re.search(r"T\d", ref_first["summary"]), ref_first["summary"]
+    assert "参考圈是起步圈" in ref_first["note"]
+
+    # 第二场的起步圈：参考圈是飞驰圈，照样不做逐弯分析
+    first = s2[0]
+    assert first["first_lap"] is True and first["ref"] is not None and first["ref"]["first_lap"] is False
+    assert first["top"] == []
+    assert first["lap_time_delta_s"] == pytest.approx(first["lap_time"] - first["ref"]["lap_time"], abs=2e-3)
+    assert first["lap_time_delta_s"] > 3
+    assert first["summary"].startswith("比参考圈慢") and "不做逐弯分析" in first["summary"]
+    assert not re.search(r"T\d", first["summary"]), first["summary"]
+    assert "起步圈" in first["note"]
+
+    # 飞驰圈对飞驰圈照常逐弯分析：第 3 圈（lap_number=2）T3 晚刹车
+    for slow in (s1[2], s2[2]):
+        assert slow["ref"]["first_lap"] is False and slow["first_lap"] is False
+        assert slow["top"] and slow["top"][0]["name"] == "T3", slow["top"]

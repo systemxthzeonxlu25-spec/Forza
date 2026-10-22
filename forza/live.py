@@ -17,7 +17,10 @@
 ------------------------
 LapSaver 存好一圈 → on_lap_saved()（在存档线程里调用，自己 try/except）→ 丢进 _pool：
 用 api.laps.default_reference 选参考圈（同赛道同车最快的完整圈，新圈自己最快就取第二快），
-跑 analysis.compare，取总差距和丢时最多的几个弯的解释句。结果放在 last_summary，
+跑 analysis.compare，取总差距和丢时最多的几个弯的解释句。
+本圈或参考圈是起步圈（发车格在线后，这圈比飞驰圈长）时只报总差距、不列逐弯解释：
+compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十到上百米，逐弯结论是错的。
+结果放在 last_summary，
 **每条 frame / status 消息都带上**（不单独发一条，否则会被下一帧顶掉）；手机发现 id 变了才弹卡片。
 最近 SUMMARY_KEEP 条可以用 GET /api/live/summaries 翻看。
 
@@ -94,6 +97,7 @@ LapSaver 存好一圈 → on_lap_saved()（在存档线程里调用，自己 try
     "ref": {"id": 9, "lap_number": 1, "lap_time": 82.9, "first_lap": false} | null,
     "lap_time_delta_s": 0.5 | null, "summary": "比参考圈慢 0.500 s，主要丢在 T3（0.31 s）",
     "top": [{"name": "T3", "time_delta_s": 0.31, "explanation": "T3：慢 0.31 s。刹车点早 25 m"}],
+                                 # 本圈或参考圈是起步圈时 top = []，summary 只报总差距（距离对不上，不做逐弯分析）
     "note": "起步圈……" | null
   },
   "status": {
@@ -268,6 +272,21 @@ def _fixed_corners(store, ref: LapData) -> list[dict] | None:
         return None
 
 
+def _first_lap_summary(d: float | None, first: bool, ref_first: bool) -> str:
+    """本圈 / 参考圈是起步圈时的小结：只说总差距和为什么不做逐弯分析。"""
+    if d is None:
+        head = "和参考圈的圈时差算不出来"
+    elif abs(d) < 0.0005:
+        head = "和参考圈圈时一样"
+    else:
+        head = f"比参考圈{'慢' if d > 0 else '快'} {abs(d):.3f} s"
+    if first and ref_first:
+        return f"{head}（两圈都是发车格静止起步，发车位置可能不同），起步圈不做逐弯分析"
+    if first:
+        return f"{head}（含静止起步和发车格到起点线那一段），起步圈不做逐弯分析"
+    return f"{head}（参考圈是起步圈，含静止起步和发车格到起点线那一段），等有了飞驰圈再做逐弯分析"
+
+
 def build_lap_summary(store, lap: LapData) -> dict:
     """新圈存好后的小结：和参考圈（default_reference）对比的总差距 + 丢时最多的几个弯。纯计算 + 读库。"""
     from .analysis import compare
@@ -306,6 +325,16 @@ def build_lap_summary(store, lap: LapData) -> dict:
                   "lap_time": _r(ref_meta.get("lap_time"), 3), "first_lap": ref_first}
     if ref_first:
         notes.append("参考圈是起步圈")
+    if first or ref_first:
+        # 起步圈的距离零点在发车格，比飞驰圈长：compare 按圈长等比例缩放，每个弯都对不上，逐弯解释是错的。
+        # 只报总差距（圈时直接相减），不跑 compare。
+        d = None
+        if _r(m.get("lap_time"), 3) is not None and out["ref"]["lap_time"] is not None:
+            d = round(float(m["lap_time"]) - float(ref_meta["lap_time"]), 3)
+        out["lap_time_delta_s"] = d
+        out["summary"] = _first_lap_summary(d, first, ref_first)
+        out["note"] = "；".join(notes) or None
+        return out
     corners = _fixed_corners(store, ref)
     try:
         res = compare(ref, lap, corners=corners) if corners else compare(ref, lap)

@@ -100,6 +100,44 @@ def test_lapsaver_tags_meta_and_survives_listener_errors(tmp_path, caplog):
     store.close()
 
 
+@pytest.mark.parametrize("source, tagged", [
+    ("import:旧录像.frec", False),       # python -m forza import：ended_epoch 是导入那一刻，不是录像当时
+    ("replay:旧录像.frec", False),       # serve --replay：同上
+    ("udp:5300", True),                  # 实时收包：照常打标签
+    ("", True),
+])
+def test_lapsaver_skips_setup_tag_for_recordings(tmp_path, source, tagged):
+    """导入 / 回放老录像切出来的圈，默认不归到“现在”的调校版本（否则会悄悄算进现在版本的中位数）。"""
+    store = Store(tmp_path / "t.db")
+    su.create_setup(store, name="前防倾杆 +2", game="fm2023", car_ordinal=100)
+    det = LapDetector()
+    det.add_listener(LapSaver(store, source, background=False))
+    s = CircleStream()
+    for f in s.run_dist(s.lap_len * 2.5):
+        det.on_frame(f)
+    det.flush()
+    laps = store.list_laps()
+    assert len(laps) == 2
+    assert all((l.get("setup_name") == "前防倾杆 +2") == tagged for l in laps)
+    store.close()
+
+
+def test_lapsaver_tag_setup_explicit_overrides_source(tmp_path):
+    """显式给 tag_setup 时以它为准：导入也可以强制打标签，实时也可以关掉。"""
+    store = Store(tmp_path / "t.db")
+    s0 = su.create_setup(store, name="基准", game="fm2023", car_ordinal=100)
+    assert LapSaver(store, "import:x.frec", tag_setup=True, background=False).tag_setup is True
+    assert LapSaver(store, "udp:5300", tag_setup=False, background=False).tag_setup is False
+    det = LapDetector()
+    det.add_listener(LapSaver(store, "import:x.frec", tag_setup=True, background=False))
+    s = CircleStream()
+    for f in s.run_dist(s.lap_len * 1.5):
+        det.on_frame(f)
+    det.flush()
+    assert [l["setup_id"] for l in store.list_laps()] == [s0["id"]]
+    store.close()
+
+
 # ---------------------------------------------------------------- 统计 / 噪音判断
 
 def test_stats_exclude_first_lap_rewind_and_outliers(store):

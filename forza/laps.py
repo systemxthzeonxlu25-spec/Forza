@@ -40,6 +40,7 @@ FINAL_LAP_RATIO = 0.95         # 最后一圈距离达到整圈的这个比例�
 SPRINT_FINISH_RATIO = 0.95     # 冲刺赛距离达到路线长度的这个比例才算跑完
 DIST_MISMATCH = 0.2            # DistanceTraveled 和速度积分差超过 20% 就改用积分距离
 MIN_SPRINT_M = 300.0           # 短于这个距离的“冲刺赛”直接丢弃（多半是赛道赛第一圈就重开了）
+UNTAGGED_SOURCES = ("import:", "replay:")   # 这些来源（导入 / 回放录像）的圈默认不归调校版本，见 LapSaver
 
 
 @dataclass
@@ -356,12 +357,17 @@ class LapSaver:
     background=True 时在后台线程里写库，不卡实时面板。
     tag_setup=True：交圈那一刻就查这台车的当前调校版本，往 meta 里写 setup_id / setup_name
     （在切圈器线程里查，不等后台排队，免得刚记了新版本、排队中的上一圈被归到新版本里）。
+    tag_setup=None（默认）：按来源定——导入 / 回放录像（source 以 "import:" / "replay:" 开头）不打标签，
+    因为切圈器的 ended_epoch 是导入 / 回放那一刻的时间，不是录像当时的时间，会把老录像的圈算进现在的版本；
+    其余（实时收包）打标签。
     存好之后顺手更新这台车的动力总成数据（功率曲线 / 传动比，见 forza/powertrain.py），再通知监听者。
     """
 
-    def __init__(self, store, source: str = "", background: bool = True, tag_setup: bool = True):
+    def __init__(self, store, source: str = "", background: bool = True, tag_setup: bool | None = None):
         self.store = store
         self.source = source
+        if tag_setup is None:
+            tag_setup = not str(source or "").startswith(UNTAGGED_SOURCES)
         self.tag_setup = tag_setup
         self._sessions: dict[int, int] = {}        # event_id -> session_id
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lap-saver") if background else None
