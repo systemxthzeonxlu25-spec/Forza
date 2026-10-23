@@ -152,7 +152,9 @@ def cmd_info(args) -> None:
     from .laps import LapDetector
     from .recorder import iter_records, read_meta
 
-    frame_mod.TIRE_TEMP_UNIT = load_config().tire_temp_unit
+    cfg = load_config()
+    cfg.validate()        # info 不走 _apply_common，这里单独检查（胎温单位写错会让整份报告的胎温都不对）
+    frame_mod.TIRE_TEMP_UNIT = cfg.tire_temp_unit
     meta = read_meta(args.file)
     hub = Hub(args.game)
     det = LapDetector()

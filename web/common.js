@@ -175,17 +175,19 @@
     nav.appendChild(btn);
   }
 
-  // 新圈落盘广播：saved_count 变大时派发 window 事件 "forza:laps-changed"（第一次轮询只记录、不派发）。
+  // 圈数据变化广播：laps_revision 变了（存了新圈，或者已存的圈被倒带作废）就派发 window 事件
+  // "forza:laps-changed"（第一次轮询只记录、不派发）。老版本服务端没有 laps_revision 时退回看 saved_count。
   // 页面里用 Forza.onLapsChanged(fn) 订阅；fn 收到 {saved_count, last_saved_lap_id}。
   let lastSaved = null;
   function checkLapsChanged(s) {
-    if (typeof s.saved_count !== "number") return;
-    if (lastSaved !== null && s.saved_count > lastSaved) {
+    const rev = typeof s.laps_revision === "number" ? s.laps_revision : s.saved_count;
+    if (typeof rev !== "number") return;
+    if (lastSaved !== null && rev !== lastSaved) {
       window.dispatchEvent(new CustomEvent("forza:laps-changed", {
         detail: { saved_count: s.saved_count, last_saved_lap_id: s.last_saved_lap_id },
       }));
     }
-    lastSaved = s.saved_count;
+    lastSaved = rev;
   }
 
   function onLapsChanged(fn) {

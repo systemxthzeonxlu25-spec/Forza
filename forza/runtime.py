@@ -189,6 +189,7 @@ class Runtime:
             # 已经写进数据库的圈数 / 最新一圈 id：网页轮询发现变化就自动刷新圈列表
             "saved_count": len(self.saver.saved_ids),
             "last_saved_lap_id": self.saver.saved_ids[-1] if self.saver.saved_ids else None,
+            "laps_revision": self.saver.revision,    # 存新圈 / 作废已存圈都会变：网页看它决定要不要刷新
         }
 
     async def _tick(self) -> None:

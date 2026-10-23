@@ -121,7 +121,8 @@ class _Event:
     line_z: float | None = None
     saw_position: bool = False         # 有没有出现过名次 > 0
     boundaries: int = 0                # 过线次数
-    lap_lengths: list[float] = field(default_factory=list)
+    lap_lengths: list[float] = field(default_factory=list)      # 本场所有完整圈的距离（含站立起步的第一圈）
+    flying_lengths: list[float] = field(default_factory=list)   # 只含飞驰圈（不是第一圈）：实时面板按它匹配赛道布局
     best_time: float | None = None
     best_lap: LapData | None = None
     # 本场已经交出去的圈的 meta（只存元数据，不多占采样内存）：倒带跨回已落盘的圈时，用它把那些圈作废
@@ -291,8 +292,9 @@ class LapDetector:
         # 本场最快圈被作废了就不能再当实时差距的参照；整圈长度表也按剩下的有效圈重算
         if ev.best_lap is not None and not ev.best_lap.meta["is_complete"]:
             ev.best_lap, ev.best_time = None, None
-        ev.lap_lengths = [m["distance_m"] for m in ev.emitted_meta
-                          if m["is_complete"] and m["kind"] == "lap"]
+        valid = [m for m in ev.emitted_meta if m["is_complete"] and m["kind"] == "lap"]
+        ev.lap_lengths = [m["distance_m"] for m in valid]
+        ev.flying_lengths = [m["distance_m"] for m in valid if "first_lap" not in m["flags"]]
         # 退到挂起圈之前（连挂起的那圈都被倒掉了）：挂起圈直接扔掉
         if self.pending and fr.lap_number < self.pending.lap_number:
             self.pending = None
@@ -381,6 +383,8 @@ class LapDetector:
 
         if kind == "lap" and complete:
             ev.lap_lengths.append(distance)
+            if "first_lap" not in buf.flags:
+                ev.flying_lengths.append(distance)
         line_x = ev.line_x if ev.line_x is not None else buf.start_x
         line_z = ev.line_z if ev.line_z is not None else buf.start_z
         if kind == "sprint":
@@ -473,6 +477,9 @@ class LapSaver:
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lap-saver") if background else None
         self._lock = threading.Lock()
         self.saved_ids: list[int] = []
+        # 圈数据版本号：存了新圈、或者已存的圈被作废（倒带跨回来）都 +1。
+        # 网页轮询 /api/status 发现它变了就刷新列表——只看 saved_count 的话，作废不会让页面刷新
+        self.revision = 0
         self._listeners: list[Callable[[LapData], None]] = []
         self._invalidation_listeners: list[Callable[[dict], None]] = []
 
@@ -495,6 +502,7 @@ class LapSaver:
         if meta.get("id") is None:
             return
         self.store.update_lap(meta["id"], is_complete=False, flags=meta["flags"])
+        self.revision += 1
         # 作废的圈可能正是定赛道参考圈长的飞驰圈之一：和删圈 / 标为不完整一样，重算一遍
         if meta.get("kind") == "lap" and meta.get("track_id") is not None:
             self.store.refresh_circuit_length(meta["track_id"], clear_if_empty=True)
@@ -556,6 +564,7 @@ class LapSaver:
                 # 赛道参考圈长 = 飞驰圈距离的中位数（站立起步的第一圈不算，它可能多跑了发车格到线的那段）
                 st.refresh_circuit_length(track_id)
             self.saved_ids.append(lap_id)
+            self.revision += 1
             log.info("已存档：#%d %s 第 %d 圈 %.3f s（%s）", lap_id, m["kind"], m["lap_number"],
                      m["lap_time"], "完整" if m["is_complete"] else "不完整")
         except Exception:

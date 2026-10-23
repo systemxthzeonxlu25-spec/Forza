@@ -651,7 +651,9 @@ class LiveBroadcaster:
             tkey = ("sprint", round(ev.start_x, 1), round(ev.start_z, 1))
         elif st_kind == "circuit" and ev.line_x is not None:
             # 赛道赛：第一次过线后按过线位置匹配；共用起点线的布局再按圈长区分
-            flying = ev.lap_lengths[1:]           # [0] 是起步圈（发车格起步，可能偏长）
+            # 只拿飞驰圈的长度去区分布局：站立起步的第一圈多跑了发车格到线那段，偏长。
+            # （不能简单地丢掉 lap_lengths[0]：中途接入时第一圈是不完整的，根本不在列表里，[0] 已经是飞驰圈了）
+            flying = ev.flying_lengths
             if flying:
                 length, tol = statistics.median(flying), TRACK_LENGTH_TOL
             elif ev.lap_lengths:

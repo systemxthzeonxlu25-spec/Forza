@@ -326,3 +326,40 @@ def test_partial_lap_on_shared_start_line_is_left_unassigned():
     assert all(l["track_id"] == right for l in laps[1:]) and short != right
     sess = store.list_sessions()
     assert len(sess) == 1 and sess[0]["track_id"] == right
+
+
+def test_flying_lengths_skip_only_standing_first_lap():
+    """中途接入时第一圈不完整、根本不进长度表：后面第一圈飞驰圈的长度要留着，给实时面板区分布局用。"""
+    det = LapDetector()
+    s = CircleStream(track_ordinal=None)
+    s.run(s.lap_len / s.v * 1.5)                                          # 本工具还没开
+    for f in s.run(s.lap_len / s.v * 1.5 + laps_mod.PENDING_WINDOW_S + 1):
+        det.on_frame(f)
+    ev = det.event
+    assert len(ev.flying_lengths) == 1 and ev.flying_lengths[0] == pytest.approx(s.lap_len, rel=0.01)
+
+    det2 = LapDetector()                                                  # 正常从发车格起步：第一圈不算飞驰圈
+    s2 = CircleStream(track_ordinal=None)
+    for f in s2.run(s2.lap_len / s2.v * 2 + laps_mod.PENDING_WINDOW_S + 1):
+        det2.on_frame(f)
+    assert len(det2.event.lap_lengths) == 2 and len(det2.event.flying_lengths) == 1
+
+
+def test_invalidation_bumps_laps_revision(tmp_path):
+    """倒带作废已存的圈也要让网页刷新：laps_revision 和存新圈一样会变。"""
+    store = Store(tmp_path / "t.db")
+    _, flying, _, saver = _flying_laps(store)
+    rev = saver.revision
+    assert rev == len(store.list_laps())
+    saver.invalidate({**flying[0], "flags": [*flying[0]["flags"], "rewound_after_save"]})
+    assert saver.revision == rev + 1
+
+
+def test_info_command_validates_config(tmp_path, capsys):
+    from forza import __main__ as cli
+    from forza.fake import write_fake_recording
+    rec = tmp_path / "x.frec"
+    write_fake_recording(rec, "fm2023_dash", laps=1, seed=1)
+    with mock.patch.object(cli, "load_config", return_value=Config(tire_temp_unit="K")):
+        assert cli.main(["info", str(rec)]) == 2
+    assert "tire_temp_unit" in capsys.readouterr().err
