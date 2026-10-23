@@ -93,7 +93,7 @@ def _add_best_info(store, laps: list[dict]) -> list[dict]:
 def _refresh_track_length(store, meta: dict) -> None:
     """圈被删掉 / 改了“完整”标记之后，赛道赛的参考圈长（飞驰圈距离中位数）要跟着重算。"""
     if meta.get("track_id") is not None and meta.get("kind") == "lap":
-        store.refresh_circuit_length(meta["track_id"])
+        store.refresh_circuit_length(meta["track_id"], clear_if_empty=True)
 
 
 # ---------------------------------------------------------------- 圈

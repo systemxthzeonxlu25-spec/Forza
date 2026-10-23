@@ -79,17 +79,18 @@ class Config:
             return
         if not isinstance(self.forward, list):
             raise ConfigError(f'forward 要是列表，例如 ["127.0.0.1:20777"]，现在是 {self.forward!r}')
-        self_hosts = set(_SELF_HOSTS) | {self.udp_host}
+        self_hosts = set(_SELF_HOSTS) | {str(self.udp_host).lower()}
         try:
             from .netinfo import lan_ips
-            self_hosts |= set(lan_ips())
+            self_hosts |= {ip.lower() for ip in lan_ips()}
         except Exception:      # 查不到局域网 IP 不影响启动，只是少查几个地址
             pass
         for item in self.forward:
             host, sep, port_s = str(item).rpartition(":")
             if not sep or not port_s.isdigit() or not 0 < int(port_s) <= 65535:
                 raise ConfigError(f'forward 里的 {item!r} 格式不对，要写成 "主机:端口"，例如 "127.0.0.1:20777"')
-            if int(port_s) == self.udp_port and host.strip("[]") in self_hosts:
+            # 主机名不区分大小写（LOCALHOST 也是本机），IPv6 地址可能带方括号：比较前统一一下
+            if int(port_s) == self.udp_port and host.strip("[]").lower() in self_hosts:
                 raise ConfigError(f"forward 里的 {item!r} 指向本程序自己的 UDP 端口 {self.udp_port}："
                                   "转发出去的包会被自己再收到，无限循环。换成别的程序的端口")
 

@@ -265,15 +265,22 @@ class Store:
         """直接改参考圈长（可变长也可变短）。"""
         self._x("UPDATE tracks SET ref_length_m = ? WHERE id=?", (length_m, track_id))
 
-    def refresh_circuit_length(self, track_id: int, recent: int = CIRCUIT_REF_RECENT) -> float | None:
+    def refresh_circuit_length(self, track_id: int, recent: int = CIRCUIT_REF_RECENT, *,
+                               clear_if_empty: bool = False) -> float | None:
         """赛道赛的参考圈长 = 最近 recent 圈完整飞驰圈（排除站立起步的第一圈）距离的中位数。
 
-        返回新的参考圈长；还没有飞驰圈时不动，返回 None。
+        返回新的参考圈长；没有飞驰圈时返回 None，参考圈长：
+        - clear_if_empty=False（默认，存新圈时用）：不动。
+        - clear_if_empty=True（删圈 / 标为不完整 / 倒带作废之后用）：清空。原来定参考圈长的那些圈已经不算数了，
+          留着旧值会让后面的圈拿一个已经不存在的圈长去匹配赛道。清空后按暂定圈长（或不看圈长）匹配，
+          等下一圈飞驰圈存进来再重新定。
         """
         rows = self._q("SELECT distance_m, flags FROM laps WHERE track_id=? AND kind='lap' AND is_complete=1 "
                        "AND distance_m > 0 ORDER BY id DESC LIMIT ?", (track_id, recent * 3))
         dists = [r["distance_m"] for r in rows if "first_lap" not in parse_flags(r["flags"])][:recent]
         if not dists:
+            if clear_if_empty:
+                self.set_track_length(track_id, None)
             return None
         ref = round(float(statistics.median(dists)), 1)
         self.set_track_length(track_id, ref)

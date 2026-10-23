@@ -495,6 +495,9 @@ class LapSaver:
         if meta.get("id") is None:
             return
         self.store.update_lap(meta["id"], is_complete=False, flags=meta["flags"])
+        # 作废的圈可能正是定赛道参考圈长的飞驰圈之一：和删圈 / 标为不完整一样，重算一遍
+        if meta.get("kind") == "lap" and meta.get("track_id") is not None:
+            self.store.refresh_circuit_length(meta["track_id"], clear_if_empty=True)
         for fn in self._invalidation_listeners:
             fn(meta)
 

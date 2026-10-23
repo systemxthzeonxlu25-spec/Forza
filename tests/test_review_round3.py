@@ -147,6 +147,8 @@ def test_detector_status_has_no_side_effects():
     ({"forward": ["127.0.0.1"]}, "格式不对"),
     ({"forward": ["127.0.0.1:5555"]}, "无限循环"),
     ({"forward": ["localhost:5555"]}, "无限循环"),
+    ({"forward": ["LOCALHOST:5555"]}, "无限循环"),                     # 主机名不区分大小写
+    ({"forward": ["[::1]:5555"]}, "无限循环"),
 ])
 def test_config_validate_rejects(kwargs, words):
     with pytest.raises(ConfigError, match=words):
@@ -229,3 +231,42 @@ def test_hub_pps_counts_recent_packets():
     for _ in range(30):
         hub.feed(bytes(10))                             # 太短的包也算收到
     assert hub.pps() == 30
+
+
+def _flying_laps(store, n_laps=4.2):
+    """在没有赛道 ID 的圆形赛道上跑几圈，返回 (track_id, 飞驰圈列表, 圈长)。"""
+    saver = LapSaver(store, "import:x", background=False)
+    det = LapDetector(saver)
+    s = CircleStream(track_ordinal=None)
+    for f in s.run(s.lap_len / s.v * n_laps):
+        det.on_frame(f)
+    det.flush()
+    track_id = store.list_tracks()[0]["id"]
+    flying = [l for l in store.list_laps() if "first_lap" not in l["flags"]]
+    return track_id, flying, s.lap_len, saver
+
+
+def test_removing_last_flying_lap_clears_reference_length(cfg):
+    """删掉 / 标掉最后一圈飞驰圈：参考圈长要清空，不能留着一个已经不存在的圈长去匹配赛道。"""
+    store = Store(cfg.resolve(cfg.db_path))
+    track_id, flying, _, _ = _flying_laps(store)
+    store.close()
+    rt = Runtime(cfg)
+    with TestClient(create_app(rt)) as c:
+        for lap in flying[:-1]:
+            assert c.delete(f"/api/laps/{lap['id']}").status_code == 200
+        assert rt.store.get_track(track_id)["ref_length_m"] is not None
+        assert c.patch(f"/api/laps/{flying[-1]['id']}", json={"is_complete": False}).status_code == 200
+        assert rt.store.get_track(track_id)["ref_length_m"] is None
+    rt.shutdown()
+
+
+def test_rewind_invalidation_recomputes_reference_length(tmp_path):
+    """倒带作废已存的飞驰圈后，赛道参考圈长按剩下的有效圈重算（和删圈 / 标为不完整一样）。"""
+    store = Store(tmp_path / "t.db")
+    track_id, flying, lap_len, saver = _flying_laps(store)
+    store.set_track_length(track_id, 9999.0)            # 故意弄脏，看作废时会不会重算
+    meta = {**flying[0], "flags": [*flying[0]["flags"], "rewound_after_save"]}
+    saver.invalidate(meta)
+    assert not store.get_lap_meta(flying[0]["id"])["is_complete"]
+    assert store.get_track(track_id)["ref_length_m"] == pytest.approx(lap_len, rel=0.01)
