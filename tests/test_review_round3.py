@@ -10,7 +10,6 @@
 - 录像写失败时状态里能看到原因
 """
 import inspect
-import shutil
 from unittest import mock
 
 import pytest

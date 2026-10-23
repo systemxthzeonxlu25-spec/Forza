@@ -19,9 +19,10 @@ import io
 import json
 import struct
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Iterator
+
+from .util import now_iso
 
 MAGIC = b"FZAREC1\n"
 _META_LEN = struct.Struct("<I")
@@ -48,7 +49,7 @@ class Recorder:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._f = _open(self.path, "wb")
-        m = {"created": datetime.now().isoformat(timespec="seconds"), "version": 1}
+        m = {"created": now_iso(), "version": 1}
         m.update(meta or {})
         mb = json.dumps(m, ensure_ascii=False).encode("utf-8")
         self._f.write(MAGIC + _META_LEN.pack(len(mb)) + mb)

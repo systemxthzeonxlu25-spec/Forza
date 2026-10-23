@@ -23,13 +23,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Callable
 
 import numpy as np
 
 from .frame import Frame
 from .lapdata import LapData, frame_sample
+from .util import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,27 @@ IDLE_S = 30.0                  # 完全收不到包这么久（游戏关了 / FH
 PAUSE_MAX_S = 180.0            # 还在收包、但连续暂停（IsRaceOn = 0）这么久，也结束当前比赛
 PARTIAL_START_S = 1.0          # 开始记录时这圈已经跑了超过这么久 = 中途接入（缺前段数据）
 UNTAGGED_SOURCES = ("import:", "replay:")   # 这些来源（导入 / 回放录像）的圈默认不归调校版本，见 LapSaver
+
+
+def should_use_integrated_distance(d_field, d_int) -> bool:
+    """这一圈的距离通道该不该改用“车速积分距离”。
+
+    游戏给的 DistanceTraveled 一般可靠，但有两种情况不能用：
+    1. 不单调（倒带、某些模式下会跳回去）；
+    2. 和车速积分出来的距离差太多（超过 DIST_MISMATCH，比如跨场次累计、被重置过）。
+    积分距离太短（< 50 m）时比例不可靠，不判。
+
+    切圈器存圈（LapDetector._emit）和实时面板算差距（live.LiveBroadcaster._reference）都用这一个函数，
+    保证同一圈在两边用的是同一种距离口径。
+    """
+    d_field = np.asarray(d_field, dtype=np.float64)
+    d_int = np.asarray(d_int, dtype=np.float64)
+    total_int = float(d_int[-1]) if len(d_int) else 0.0
+    if total_int <= 50:
+        return False
+    total_field = float(d_field[-1]) if len(d_field) else 0.0
+    monotonic = bool(np.all(np.diff(d_field) >= -0.5)) if len(d_field) > 1 else True
+    return not monotonic or abs(total_field - total_int) / total_int > DIST_MISMATCH
 
 
 @dataclass
@@ -352,14 +373,9 @@ class LapDetector:
         ev = self.event
         meta_fr = self._last_frame
         lap = LapData.from_rows({}, buf.rows)
-        # 距离通道：DistanceTraveled 和速度积分对不上（或不单调）时，改用速度积分
-        d_field = lap.ch["dist"]
-        d_int = np.asarray(buf.idist, dtype=np.float64)
-        total_int = float(d_int[-1]) if len(d_int) else 0.0
-        total_field = float(d_field[-1]) if len(d_field) else 0.0
-        monotonic = bool(np.all(np.diff(d_field) >= -0.5)) if len(d_field) > 1 else True
-        if total_int > 50 and (not monotonic or abs(total_field - total_int) / total_int > DIST_MISMATCH):
-            lap.ch["dist"] = d_int
+        # 距离通道：游戏给的距离不可靠时改用车速积分（规则见 should_use_integrated_distance）
+        if should_use_integrated_distance(lap.ch["dist"], buf.idist):
+            lap.ch["dist"] = np.asarray(buf.idist, dtype=np.float64)
             buf.flags.add("dist_integrated")
         distance = float(lap.ch["dist"][-1]) if len(lap) else 0.0
 
@@ -391,7 +407,7 @@ class LapDetector:
             "start_x": line_x, "start_z": line_z,
             "end_reason": reason,
             "ended_epoch": round(ended_epoch if ended_epoch else time.time(), 3),
-            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "created_at": now_iso(),
         }
         if complete and kind == "lap" and (ev.best_time is None or lap_time < ev.best_time):
             ev.best_time = lap_time

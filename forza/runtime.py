@@ -25,6 +25,7 @@ from .recorder import Recorder
 from .replay import replay_to_hub
 from .storage import Store
 from .udp import start_udp
+from .util import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ class Runtime:
                 "minutes": round(minutes, 2)}
         count = await asyncio.to_thread(write_packed, path, packed, meta)   # 写文件放后台线程
         self.last_snapshot = {"path": str(path), "packets": count, "seconds": secs,
-                              "created_at": datetime.now().isoformat(timespec="seconds")}
+                              "created_at": now_iso()}
         log.info("已保存最近 %.1f 分钟原始包：%s（%d 个包，%.0f s）", minutes, path, count, secs)
         return {"path": str(path), "packets": count, "seconds": secs}
 

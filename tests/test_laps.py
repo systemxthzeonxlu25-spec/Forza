@@ -1,5 +1,4 @@
 """切圈逻辑：正常圈、暂停、倒带（圈内 / 跨线）、重开、最后一圈、冲刺赛、自由漫游、换车。"""
-import math
 
 import numpy as np
 import pytest

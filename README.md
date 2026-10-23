@@ -308,7 +308,8 @@ forza/
   live.py         实时推送（WebSocket）、本圈小结、PB 参照
   analysis.py     两圈对比（解释句阈值在文件顶部）
   sectors.py      固定弯道 / 分段表、理论最佳圈、逐段稳定性
-  tuning.py       调车诊断（阈值在 tuning_rules.toml）
+  tuning/         调车诊断包：每项检查一个 check_*.py，主流程在 diagnosis.py（阈值在 tuning_rules.toml）
+  util.py         各模块共用的小工具（时间戳、圈标记 flags 解析、数值取舍）
   setups.py       调校版本               powertrain.py 功率曲线 / 传动比 / 换挡点
   api/            各模块的 HTTP 路由         fake/       假数据生成器
 web/              前端（原生 JS，无需构建；uPlot 等依赖已放在 web/vendor）
@@ -319,7 +320,7 @@ tests/            pytest，全部基于假数据 / 手搓帧，不需要游戏
 
 - **游戏出了新包格式**：在 `forza/packet.py` 里照着现有字段表加一个 `PacketFormat`，再在 `profiles.py` 里加游戏配置。
 - **切圈要多记一个通道**：在 `lapdata.py` 的 `CHANNELS` 和 `frame_sample()` 各加一项。
-- **加一条诊断规则**：在 `tuning.py` 里照着现有检查写一个函数，阈值放进 `tuning_rules.toml`。
+- **加一条诊断规则**：在 `forza/tuning/` 里照着现有的 `check_*.py` 新建一个文件写检查函数，加进 `diagnosis.py` 的 `CHECKS`，阈值放进 `tuning_rules.toml`（步骤见 `forza/tuning/__init__.py` 的说明）。
 - **改解释句的阈值**（比如滑行多久才提）：在 `analysis.py` 顶部的常量里改。
 - **假数据加花样**：`python -m forza fake --grid-offset 200` 可以从线后 200 m 的发车格起步，用来测第一圈比飞驰圈长的情况。
 - **拿真实数据校准**：用 `python -m forza serve --record` 跑几圈，录像放进 `samples/`。之后 `python -m forza info` 看切圈结果，`python -m forza import` 导入后在网页上看对比和诊断。

@@ -9,10 +9,7 @@
 
   // ------------------------------------------------------------------ 小工具
   const $ = (sel, root = document) => root.querySelector(sel);
-  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const rootCss = getComputedStyle(document.documentElement);
-  const cssVar = (name, fb) => rootCss.getPropertyValue(name).trim() || fb;
+  const { esc, cssVar } = F;      // 公用的 HTML 转义 / 读 CSS 变量（见 common.js）
   const COL = {
     a: cssVar("--accent", "#4ea1ff"),
     b: cssVar("--accent-2", "#ff9f43"),

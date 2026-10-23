@@ -24,7 +24,6 @@ import json
 import math
 import threading
 import weakref
-from datetime import datetime
 
 import numpy as np
 
@@ -35,6 +34,7 @@ from .corners import (
     resample_by_distance,
 )
 from .lapdata import LapData
+from .util import is_standing_first_lap, now_iso
 
 OUTLIER_RATIO = 0.20          # 某段用时偏离这段中位数超过 20% 就不计入（理论最佳 / 标准差都不用它）
 MIN_LAPS_FOR_STD = 3          # 至少这么多圈才算标准差、挑“最不稳”的段
@@ -61,9 +61,6 @@ _ready_lock = threading.Lock()
 _times_cache: dict[tuple, dict] = {}
 _CACHE_MAX = 5000
 
-
-def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
 
 
 def _ensure_table(store) -> None:
@@ -170,7 +167,7 @@ def save_layout(store, track_id: int, layout: dict) -> dict:
     data = json.dumps({"corners": layout["corners"],
                        "sectors": [{k: s[k] for k in ("code", "start_frac", "end_frac")} for s in layout["sectors"]],
                        "kind": layout.get("kind")}, ensure_ascii=False)
-    now = _now()
+    now = now_iso()
     store.execute(
         """INSERT INTO track_layout (track_id, source_lap_id, length_m, data, created_at, updated_at)
            VALUES (?,?,?,?,?,?)
@@ -220,7 +217,7 @@ def rebuild_layout(store, track_id: int, lap_id: int | None = None) -> tuple[dic
         raise ValueError(f"圈 #{lap_id} 不存在")
     if lap.meta.get("track_id") != track_id:
         raise ValueError(f"圈 #{lap_id} 不在这条赛道上")
-    if _standing_first_lap(lap.meta):
+    if is_standing_first_lap(lap.meta):
         raise ValueError(f"圈 #{lap_id} 是发车格起步的第一圈，距离从线后算起，和飞驰圈对不上，不能用来生成弯道表")
     new = build_layout(lap)
     old = get_layout(store, track_id)
@@ -273,16 +270,11 @@ def rename_corner(store, track_id: int, code: str, name: str | None) -> dict:
     data = json.dumps({"corners": layout["corners"],
                        "sectors": [{k: s[k] for k in ("code", "start_frac", "end_frac")} for s in layout["sectors"]],
                        "kind": layout.get("kind")}, ensure_ascii=False)
-    store.execute("UPDATE track_layout SET data=?, updated_at=? WHERE track_id=?", (data, _now(), track_id))
+    store.execute("UPDATE track_layout SET data=?, updated_at=? WHERE track_id=?", (data, now_iso(), track_id))
     return get_layout(store, track_id)
 
 
 # ================================================================ 映射到某一圈
-
-def _standing_first_lap(meta: dict) -> bool:
-    """赛道赛的第一圈：从起终点线后的发车格起步，距离从发车格算起（冲刺赛每次都这样，表本身就是这么来的，不算）。"""
-    return "first_lap" in (meta.get("flags") or []) and meta.get("kind") != "sprint"
-
 
 def _has_xy(rs: dict) -> bool:
     """重采样后的坐标能不能用（有通道、没有 NaN、不是全 0）。"""
@@ -345,7 +337,7 @@ def layout_corners(store, lap: LapData) -> list[dict] | None:
     ref_len = layout.get("length_m") or 0.0
     if L <= 0 or (ref_len > 0 and abs(L - ref_len) / ref_len > LAYOUT_LENGTH_TOL):
         return None
-    if _standing_first_lap(lap.meta) and ref_len > 0:
+    if is_standing_first_lap(lap.meta) and ref_len > 0:
         scale, shift = ref_len, L - ref_len            # 第一圈：整体平移（发车格到线的那段），不拉伸
     else:
         scale, shift = L, 0.0                          # 飞驰圈：走线不同造成的长短差摊到全圈

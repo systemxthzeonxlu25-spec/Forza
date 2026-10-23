@@ -125,7 +125,7 @@
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
   const num = (x) => typeof x === "number" && isFinite(x);
   const signed = (x, d = 2) => (num(x) ? (x < 0 ? "−" : "") + Math.abs(x).toFixed(d) : "--");
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const esc = Forza.esc;      // 公用的 HTML 转义（见 common.js）
 
   // ======================= 颜色 =======================
   // 胎温 → 颜色：冷蓝 → 理想绿 → 偏热黄 → 过热红

@@ -16,7 +16,7 @@
 本圈小结（新圈存好之后）
 ------------------------
 LapSaver 存好一圈 → on_lap_saved()（在存档线程里调用，自己 try/except）→ 丢进 _pool：
-用 api.laps.default_reference 选参考圈（同赛道同车最快的完整圈，新圈自己最快就取第二快），
+用 Store.default_reference 选参考圈（同赛道同车最快的完整圈，新圈自己最快就取第二快），
 跑 analysis.compare，取总差距和丢时最多的几个弯的解释句。
 本圈或参考圈是起步圈（发车格在线后，这圈比飞驰圈长）时只报总差距、不列逐弯解释：
 compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十到上百米，逐弯结论是错的。
@@ -129,10 +129,11 @@ from fastapi import WebSocket
 
 from .frame import Frame
 from .lapdata import LapData
-from .laps import DIST_MISMATCH
+from .laps import should_use_integrated_distance
 from .netinfo import lan_ips
 from .packet import FORMATS
 from .profiles import get_profile
+from .util import is_standing_first_lap, lap_has_flag, parse_flags, round_or_none
 
 log = logging.getLogger(__name__)
 
@@ -155,15 +156,7 @@ except ImportError:              # 存储模块改了常量名时退回默认值
     TRACK_START_RADIUS_M, TRACK_LENGTH_TOL = 60.0, 0.04
 
 
-def _r(x, nd: int = 2):
-    """数值取舍；NaN / inf / 不是数 → None（JSON 里不能出现 NaN，否则浏览器解析会失败）。"""
-    try:
-        x = float(x)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(x):
-        return None
-    return round(x, nd)
+_r = round_or_none     # 这个模块里用得太多，起个短名字
 
 
 def _r4(vals, nd: int = 2) -> list:
@@ -174,16 +167,6 @@ def _pos(x) -> float | None:
     """游戏里 0 表示“没有”的时间字段：<= 0 → None。"""
     v = _r(x, 3)
     return v if v is not None and v > 0 else None
-
-
-def _flags(v) -> list:
-    """laps.flags 列：库里是 JSON 文本，meta 里是列表。"""
-    if isinstance(v, str):
-        try:
-            v = json.loads(v or "[]")
-        except ValueError:
-            return []
-    return list(v or [])
 
 
 # ====================================================================== 赛道匹配（只查不建）
@@ -248,7 +231,7 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
 
 def _ref_arrays(lap: LapData) -> tuple[np.ndarray, np.ndarray, bool]:
     """存档圈的 (距离, 时间, 是否速度积分距离)，距离做成单调的（np.interp 要求）。"""
-    integrated = "dist_integrated" in _flags(lap.meta.get("flags"))
+    integrated = lap_has_flag(lap.meta, "dist_integrated")
     rd = np.maximum.accumulate(np.asarray(lap.ch["dist"], dtype=np.float64))
     rt_ = np.asarray(lap.ch["t"], dtype=np.float64)
     return rd, rt_, integrated
@@ -288,13 +271,12 @@ def _first_lap_summary(d: float | None, first: bool, ref_first: bool) -> str:
 
 
 def build_lap_summary(store, lap: LapData) -> dict:
-    """新圈存好后的小结：和参考圈（default_reference）对比的总差距 + 丢时最多的几个弯。纯计算 + 读库。"""
+    """新圈存好后的小结：和参考圈（Store.default_reference）对比的总差距 + 丢时最多的几个弯。纯计算 + 读库。"""
     from .analysis import compare
-    from .api.laps import default_reference
 
     m = lap.meta
-    flags = _flags(m.get("flags"))
-    first = "first_lap" in flags and m.get("kind") != "sprint"
+    flags = parse_flags(m.get("flags"))
+    first = is_standing_first_lap(m)
     out = {
         "id": m.get("id"), "lap_id": m.get("id"), "t": round(time.time(), 3),
         "lap_number": m.get("lap_number"), "kind": m.get("kind"),
@@ -314,13 +296,13 @@ def build_lap_summary(store, lap: LapData) -> dict:
     if out["track_name"] is None and m.get("track_id") is not None:
         with suppress(Exception):
             out["track_name"] = (store.get_track(m["track_id"]) or {}).get("name")
-    ref_meta = default_reference(store, m) if m.get("id") is not None else None
+    ref_meta = store.default_reference(m) if m.get("id") is not None else None
     if ref_meta is None:
         out["summary"] = "这条赛道 + 这台车的第一个完整圈，还没有参考圈可比"
         out["note"] = "；".join(notes) or None
         return out
     ref = store.get_lap(ref_meta["id"])
-    ref_first = "first_lap" in _flags(ref_meta.get("flags")) and ref_meta.get("kind") != "sprint"
+    ref_first = is_standing_first_lap(ref_meta)
     out["ref"] = {"id": ref_meta["id"], "lap_number": ref_meta.get("lap_number"),
                   "lap_time": _r(ref_meta.get("lap_time"), 3), "first_lap": ref_first}
     if ref_first:
@@ -638,18 +620,15 @@ class LiveBroadcaster:
         c = self._ref_cache
         if c is None or c[0] != key:
             if kind == "best":
-                integrated = "dist_integrated" in (obj.meta.get("flags") or [])
+                integrated = lap_has_flag(obj.meta, "dist_integrated")
                 rd = np.asarray(obj.ch["dist"], dtype=np.float64)
                 rt_ = np.asarray(obj.ch["t"], dtype=np.float64)
             else:
                 rt_ = np.asarray([r[0] for r in obj.rows], dtype=np.float64)
                 d_field = np.asarray([r[1] for r in obj.rows], dtype=np.float64)
                 d_int = np.asarray(obj.idist, dtype=np.float64)
-                # 和切圈器 _emit 的规则一致：DistanceTraveled 对不上速度积分（或不单调）就用积分距离
-                total_int = float(d_int[-1]) if len(d_int) else 0.0
-                total_field = float(d_field[-1]) if len(d_field) else 0.0
-                monotonic = bool(np.all(np.diff(d_field) >= -0.5))
-                integrated = total_int > 50 and (not monotonic or abs(total_field - total_int) / total_int > DIST_MISMATCH)
+                # 和切圈器存圈时用同一个判断，保证挂起圈落盘前后距离口径不变
+                integrated = should_use_integrated_distance(d_field, d_int)
                 rd = d_int if integrated else d_field
             rd = np.maximum.accumulate(rd)   # np.interp 要求 x 单调
             c = self._ref_cache = (key, rd, rt_, integrated)
@@ -759,7 +738,7 @@ class LiveBroadcaster:
             "AND is_complete=1 AND lap_time > 0 ORDER BY lap_time ASC LIMIT ?",
             (track_id, car_ordinal, game, PB_SCAN_LIMIT))
         if kind == "circuit":   # 起步圈的起点和距离零点不一样，不拿来当参照
-            rows = [r for r in rows if "first_lap" not in _flags(r["flags"])]
+            rows = [r for r in rows if not lap_has_flag(r, "first_lap")]
         if not rows:
             return {"state": "none", "reason": "这台车在这条赛道上还没有完整的飞驰圈", "track_id": track_id}
         same = [r for r in rows if car_pi and r["car_pi"] == car_pi]

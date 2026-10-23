@@ -29,6 +29,19 @@
     return (s >= 0 ? "+" : "−") + Math.abs(s).toFixed(digits);
   }
 
+  // 把任意值转成可以安全拼进 innerHTML 的文本（& < > " ' 都转义）。
+  // 页面里凡是用户能改的内容（车名、赛道名、备注、调校版本名……）拼 HTML 前都要过一遍它。
+  const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ESC[c]);
+  }
+
+  // 读 CSS 变量（主题色等，定义在 common.css 的 :root 里）；没定义时用 fallback。
+  // 画布（canvas / uPlot）的颜色只能在 JS 里给，所以各页面用它从 CSS 取色，换主题只改 CSS。
+  function cssVar(name, fallback = "") {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  }
+
   function carClass(family, cls) {
     const names = CLASS_NAMES[family] || [];
     return names[cls] ?? String(cls);
@@ -105,5 +118,5 @@
     return new URLSearchParams(location.search).get(name);
   }
 
-  window.Forza = { fmtLap, fmtDelta, carClass, DRIVETRAIN, api, nav, qs, onLapsChanged, watchStatus, checkLapsChanged };
+  window.Forza = { fmtLap, fmtDelta, carClass, DRIVETRAIN, api, esc, cssVar, nav, qs, onLapsChanged, watchStatus, checkLapsChanged };
 })();

@@ -129,7 +129,7 @@ def lap_reference(request: Request, lap_id: int):
     """深链 /laps.html?b=ID 没给 a 时，前端用它选参考圈（和 /api/compare 只给一个圈时选的一样）。"""
     store = _store(request)
     meta = _lap_meta_or_404(store, lap_id)
-    ref = default_reference(store, meta)
+    ref = store.default_reference(meta)
     return {"lap_id": lap_id, "reference": jsonable(_add_best_info(store, [ref])[0]) if ref else None}
 
 
@@ -195,17 +195,6 @@ def list_sessions(request: Request, limit: int = 100):
 
 # ---------------------------------------------------------------- 对比
 
-def default_reference(store, lap_meta: dict) -> dict | None:
-    """同赛道、同车、同游戏里最快的完整圈（排除 lap_meta 自己；它本身最快时就是第二快）。"""
-    if lap_meta.get("track_id") is None:
-        return None
-    laps = store.list_laps(track_id=lap_meta["track_id"], car_ordinal=lap_meta.get("car_ordinal"),
-                           game=lap_meta.get("game"), complete_only=True, limit=5000)
-    laps = [l for l in laps if l["id"] != lap_meta["id"] and l.get("lap_time")]
-    laps.sort(key=lambda l: l["lap_time"])
-    return laps[0] if laps else None
-
-
 def _fixed_corners(store, ref):
     """赛道的固定弯道表映射到参考圈上；没有表（也生成不了）或出错时返回 None（退回参考圈自己识别）。"""
     try:
@@ -239,7 +228,7 @@ def compare(request: Request, a: str | None = None, b: str | None = None, step: 
     a_meta = _lap_meta_or_404(store, a_id)
     auto = b is None or str(b).strip() == ""
     if auto:
-        best = default_reference(store, a_meta)
+        best = store.default_reference(a_meta)
         if best is None:
             raise HTTPException(404, f"圈 #{a_id} 所在的赛道 + 车还没有别的完整圈，没法自动选参考圈。"
                                      "再跑一圈，或者手动指定 b")
