@@ -198,16 +198,6 @@ class Store:
             return (1, abs(length_m - prov) / prov) if ok else None
         return (2, 0.0)
 
-    def nearby_track_ids(self, *, family: str, kind: str, start_x: float, start_z: float) -> list[int]:
-        """起点 / 起终点线在 (start_x, start_z) 附近（TRACK_START_RADIUS_M 以内）的赛道，不看圈长。
-
-        共用一条起终点线的不同布局会同时出现在这里，调用方据此判断“只看位置能不能确定是哪条赛道”。
-        """
-        rows = self._q("SELECT id, start_x, start_z FROM tracks WHERE family=? AND kind=? AND track_ordinal IS NULL "
-                       "ORDER BY id", (family, kind))
-        return [r["id"] for r in rows if r["start_x"] is not None and r["start_z"] is not None
-                and math.hypot(r["start_x"] - start_x, r["start_z"] - start_z) <= TRACK_START_RADIUS_M]
-
     def find_track(self, *, family: str, kind: str, track_ordinal: int | None, start_x: float, start_z: float,
                    length_m: float | None, first_lap: bool = False) -> int | None:
         """按 find_or_create_track 的规则找已有赛道，找不到返回 None（只查不建）。"""

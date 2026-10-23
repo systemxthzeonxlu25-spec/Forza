@@ -63,7 +63,7 @@ def test_partial_start_lap_does_not_create_bogus_track():
     laps = store.list_laps()
     partial = [l for l in laps if "partial_start" in l["flags"]]
     assert len(partial) == 1 and not partial[0]["is_complete"]
-    assert all(l["track_id"] == tracks[0]["id"] for l in laps)
+    assert all(l["track_id"] == tracks[0]["id"] for l in laps)          # 半圈由后面的整圈补上了赛道
 
 
 # ---------------------------------------------------------------- 暂停
@@ -306,24 +306,35 @@ def test_status_does_not_query_network_on_event_loop(cfg):
     rt.shutdown()
 
 
-def test_partial_lap_on_shared_start_line_is_left_unassigned():
-    """中途接入的半圈、起终点线附近有两条布局（光看位置分不出）：不归到任何赛道，会话由后面认出的整圈补上。"""
-    store = Store(":memory:")
-    s = CircleStream(track_ordinal=None)
-    kw = dict(family=s.family, game=s.game, kind="circuit", track_ordinal=None, start_x=0.0, start_z=-s.R)
-    short = store.find_or_create_track(length_m=s.lap_len * 0.6, **kw)     # 同一起点线的另一个布局
-    right = store.find_or_create_track(length_m=s.lap_len, **kw)
-    assert len(store.nearby_track_ids(family=s.family, kind="circuit", start_x=0.0, start_z=-s.R)) == 2
-
+def _run_partial_session(store, s):
+    """比赛跑到一半才开始收包，再跑两圈多。返回按 id 排好的圈。"""
     saver = LapSaver(store, "udp:test", background=False)
     det = LapDetector(saver)
     s.run(s.lap_len / s.v * 1.5)                                          # 本工具还没开
     for f in s.run(s.lap_len / s.v * 2.2):
         det.on_frame(f)
     det.flush()
-    laps = sorted(store.list_laps(), key=lambda l: l["id"])
-    assert "partial_start" in laps[0]["flags"] and laps[0]["track_id"] is None
-    assert all(l["track_id"] == right for l in laps[1:]) and short != right
+    return sorted(store.list_laps(), key=lambda l: l["id"])
+
+
+@pytest.mark.parametrize("known", ["both_layouts", "only_other_layout"])
+def test_partial_lap_waits_for_full_lap_to_pick_track(known):
+    """中途接入的半圈光看位置认不准布局：先不归赛道，等同一场第一个完整圈认出赛道后，半圈和会话一起补上。
+
+    only_other_layout：库里只有同一起终点线的另一个布局（附近“正好一条”），当前跑的是还没存过的新布局——
+    半圈也不能挂到那条旧布局上。
+    """
+    store = Store(":memory:")
+    s = CircleStream(track_ordinal=None)
+    kw = dict(family=s.family, game=s.game, kind="circuit", track_ordinal=None, start_x=0.0, start_z=-s.R)
+    other = store.find_or_create_track(length_m=s.lap_len * 0.6, **kw)    # 同一起终点线的另一个布局
+    if known == "both_layouts":
+        store.find_or_create_track(length_m=s.lap_len, **kw)
+    laps = _run_partial_session(store, s)
+    right = laps[1]["track_id"]
+    assert right is not None and right != other
+    assert "partial_start" in laps[0]["flags"] and laps[0]["track_id"] == right   # 半圈被补到了对的赛道
+    assert all(l["track_id"] == right for l in laps)
     sess = store.list_sessions()
     assert len(sess) == 1 and sess[0]["track_id"] == right
 
