@@ -62,6 +62,71 @@
     return r.status === 204 ? null : r.json();
   }
 
+
+  // ---------------- 页首插画：粗线稿 + 平涂色块（线条用 SVG 位移滤镜做出手绘的抖动） ----------------
+  // 颜色写死（不跟主题变）：墨色线条 + 象牙白块，底色是 Clay / Sky / Olive / Oat 之一。
+  const INK = "#141413", IVORY = "#faf9f5";
+  const wobble = (id) =>
+    `<filter id="${id}" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="7"/>` +
+    `<feDisplacementMap in="SourceGraphic" scale="4" xChannelSelector="R" yChannelSelector="G"/></filter>`;
+  const stroke = `fill="none" stroke="${INK}" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"`;
+  const ILLUS = {
+    // 对比：一块象牙白的 L 形，旁边一块方形正要拼上去
+    laps: (id) => `<svg viewBox="0 0 250 150" role="img" aria-label="两块拼图"><defs>${wobble(id)}</defs>
+      <rect width="250" height="150" fill="#d97757"/>
+      <path d="M118 38L171 36L170 104L81 106L83 71L118 70Z" fill="${IVORY}"/>
+      <g filter="url(#${id})"><rect x="62" y="30" width="44" height="40" ${stroke}/></g></svg>`,
+    // 诊断：象牙白底板上的节点图
+    tuning: (id) => `<svg viewBox="0 0 250 150" role="img" aria-label="节点图"><defs>${wobble(id)}</defs>
+      <rect width="250" height="150" fill="#6a9bcc"/>
+      <path d="M42 31L207 29L208 121L43 123Z" fill="${IVORY}"/>
+      <g filter="url(#${id})">
+        <g ${stroke} stroke-width="5">
+          <path d="M125 76L113 42M125 76L152 50M125 76L88 66M125 76L96 98M125 76L130 112M125 76L166 92"/>
+        </g>
+        <g fill="${IVORY}" stroke="${INK}" stroke-width="5">
+          <circle cx="125" cy="76" r="9"/><circle cx="112" cy="40" r="6"/><circle cx="154" cy="48" r="6"/>
+          <circle cx="86" cy="66" r="6"/><circle cx="94" cy="100" r="6"/><circle cx="130" cy="114" r="6"/><circle cx="168" cy="93" r="6"/>
+        </g>
+      </g></svg>`,
+    // 车辆：半圆仪表盘
+    car: (id) => `<svg viewBox="0 0 250 150" role="img" aria-label="仪表盘"><defs>${wobble(id)}</defs>
+      <rect width="250" height="150" fill="#788c5d"/>
+      <path d="M52 112A73 73 0 0 1 198 112Z" fill="${IVORY}"/>
+      <g filter="url(#${id})">
+        <path d="M52 112A73 73 0 0 1 198 112" ${stroke}/>
+        <path d="M125 112L158 66" ${stroke} stroke-width="7"/>
+        <circle cx="125" cy="112" r="9" fill="${INK}"/>
+        <g ${stroke} stroke-width="4"><path d="M66 90L76 96M88 66L95 75M125 48V60M162 56L156 66M186 86L176 92"/></g>
+        <path d="M34 118H216" ${stroke}/>
+      </g></svg>`,
+    // 连接：手机 + 信号弧
+    connect: (id) => `<svg viewBox="0 0 250 150" role="img" aria-label="手机和信号"><defs>${wobble(id)}</defs>
+      <rect width="250" height="150" fill="#e3dacc"/>
+      <rect x="90" y="22" width="62" height="110" rx="12" fill="${IVORY}"/>
+      <g filter="url(#${id})">
+        <rect x="90" y="22" width="62" height="110" rx="12" ${stroke}/>
+        <path d="M112 38H130" ${stroke}/><circle cx="121" cy="118" r="4" fill="${INK}"/>
+        <path d="M172 60C184 66 184 86 172 92" ${stroke}/><path d="M186 46C206 58 206 94 186 106" ${stroke}/>
+        <path d="M70 60C58 66 58 86 70 92" ${stroke}/><path d="M56 46C36 58 36 94 56 106" ${stroke}/>
+      </g></svg>`,
+  };
+  const HERO = {
+    laps:   { title: "圈速对比", sub: "选两圈，看差在哪个弯、哪一段，理论最佳圈能快多少。" },
+    tuning: { title: "调车诊断", sub: "每条结论都附实测数据和判断依据；数据不够时直接说“数据不足”。" },
+    car:    { title: "车辆调校", sub: "调校版本对比、实测功率曲线、各挡传动比和换挡点、改终传预测。" },
+    connect:{ title: "连接手机", sub: "手机和电脑连同一个 Wi-Fi，扫码就能把实时面板放到手机上。" },
+  };
+  function hero(key) {
+    const h = HERO[key], main = document.querySelector("main.page");
+    if (!h || !main || main.querySelector(".hero")) return;
+    const el = document.createElement("header");
+    el.className = "hero";
+    el.innerHTML = `<div class="hero-text"><h1>${h.title}</h1><p>${h.sub}</p></div>` +
+      `<div class="hero-art" aria-hidden="false">${ILLUS[key]("wob-" + key)}</div>`;
+    main.prepend(el);
+  }
+
   // 顶部导航 + 右侧数据状态小点（每 2 秒查一次 /api/status）
   function nav(active) {
     const el = document.createElement("nav");
@@ -71,6 +136,8 @@
       PAGES.map((p) => `<a href="${p.href}" class="${p.key === active ? "active" : ""}">${p.label}</a>`).join("") +
       `<span class="spacer"></span><span class="muted" id="nav-status"><span class="status-dot"></span>无数据</span>`;
     document.body.prepend(el);
+    if (!document.body.classList.contains("live-page")) addThemeButton(el);   // 实时面板固定深色
+    hero(active);
     const st = el.querySelector("#nav-status");
     async function poll() {
       try {
@@ -86,6 +153,25 @@
     }
     poll();
     setInterval(poll, 2000);
+  }
+
+  // 主题切换：跟随系统 → 浅色 → 深色 → 跟随系统。选择存在 localStorage，theme.js 在 <head> 里恢复。
+  const THEME_LABEL = { auto: "跟随系统", light: "浅色", dark: "深色" };
+  function addThemeButton(nav) {
+    const btn = document.createElement("button");
+    btn.className = "theme-btn";
+    const cur = () => document.documentElement.getAttribute("data-theme") || "auto";
+    const paint = () => { btn.textContent = THEME_LABEL[cur()]; btn.title = "切换主题"; };
+    btn.addEventListener("click", () => {
+      const next = { auto: "light", light: "dark", dark: "auto" }[cur()];
+      if (next === "auto") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", next);
+      try { next === "auto" ? localStorage.removeItem("forza-theme") : localStorage.setItem("forza-theme", next); } catch (_) { /* 忽略 */ }
+      paint();
+      location.reload();     // 图表（canvas / uPlot）的颜色在页面加载时取一次，重载最省事
+    });
+    paint();
+    nav.appendChild(btn);
   }
 
   // 新圈落盘广播：saved_count 变大时派发 window 事件 "forza:laps-changed"（第一次轮询只记录、不派发）。

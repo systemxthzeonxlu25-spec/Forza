@@ -1,4 +1,4 @@
-/* 实时面板（手机第二屏）：深色、高对比、大数字；手机竖屏 / 横屏 / 电脑都一屏放下、不滚动。
+/* 实时面板（手机第二屏）：暖深色（同 common.css 的深色主题）、高对比、大数字；手机竖屏 / 横屏 / 电脑都一屏放下、不滚动。
    尺寸思路：外层用 grid 按比例分块（竖屏 / 横屏两套布局），每块是一个 size 容器，
    里面的字号用容器单位 cqh / cqw（相对这一块的高 / 宽），所以屏幕多大字就多大，不会溢出。 */
 
@@ -6,13 +6,13 @@
   --gap: 6px;
   --rpm-h: clamp(28px, 7vmin, 46px);
   --bar-h: 20px;
-  --tire-cold: #3b82f6;
+  --tire-cold: #6a9bcc;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: #000;               /* 纯黑：OLED 手机更省电、对比更高 */
+  background: var(--bg);
   overscroll-behavior: none;
   -webkit-user-select: none;
   user-select: none;
@@ -40,8 +40,8 @@
 .banner .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .banner.open .txt { white-space: normal; }
 .banner .x { flex: 0 0 auto; background: none; border: none; color: inherit; opacity: .7; padding: 2px 6px; font-size: 16px; line-height: 1; }
-.banner.warn { background: #3a2f0b; color: #ffe08a; border: 1px solid #6b5514; }
-.banner.info { background: #0f2740; color: #cfe6ff; border: 1px solid #1d4b7a; }
+.banner.warn { background: color-mix(in srgb, var(--warn) 16%, var(--bg)); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+.banner.info { background: color-mix(in srgb, var(--accent-2) 16%, var(--bg)); color: var(--accent-2); border: 1px solid color-mix(in srgb, var(--accent-2) 40%, transparent); }
 
 /* ---------------- 主网格 ---------------- */
 .dash {
@@ -79,7 +79,7 @@
   overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 20px;
   container-type: size;
   transition: opacity .25s;
 }
@@ -101,7 +101,7 @@
 }
 .rpm-fill {
   position: absolute; inset: 0;
-  background: linear-gradient(90deg, #1f8f4e, var(--good));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--good) 55%, var(--bg)), var(--good));
   transform-origin: left center; transform: scaleX(0);
   will-change: transform;
 }
@@ -116,7 +116,7 @@
   background: rgba(255, 255, 255, .25);
 }
 .shift-measured .rpm-track::after { background: var(--text); width: 3px; }
-.rpm-warn .rpm-fill { background: linear-gradient(90deg, #b88a10, var(--warn)); }
+.rpm-warn .rpm-fill { background: linear-gradient(90deg, color-mix(in srgb, var(--warn) 55%, var(--bg)), var(--warn)); }
 .rpm-shift .rpm-fill { background: var(--bad); animation: shiftflash .16s steps(1) infinite; }
 .rpm-shift .rpm-track { border-color: var(--bad); }
 .rpm-num {
@@ -151,7 +151,7 @@
 }
 #gear { font-size: min(118cqh, 66cqw); font-weight: 800; line-height: .82; letter-spacing: -.04em; }
 .c-gear.na #gear { font-size: min(16cqh, 14cqw); font-weight: 600; letter-spacing: 0; color: var(--muted); }
-.rpm-shift .c-gear { background: var(--bad); color: #000; animation: shiftflash .16s steps(1) infinite; }
+.rpm-shift .c-gear { background: var(--bad); color: var(--on-accent); animation: shiftflash .16s steps(1) infinite; }
 .c-speed {
   grid-area: speed; display: flex; align-items: baseline; justify-content: center; gap: .25em;
   line-height: 1; cursor: pointer;
@@ -253,7 +253,7 @@
 .t-temp {
   flex: 1 1 auto; min-height: 0;
   display: grid; grid-template-rows: auto minmax(0, 1fr); justify-items: center; align-items: center;
-  border-radius: 7px; background: var(--panel-2); color: #0b0d10; overflow: hidden;
+  border-radius: 7px; background: var(--panel-2); color: #141413; overflow: hidden;
 }
 .t-temp .t-name { justify-self: start; padding: 2px 6px 0; font-size: min(9.5cqh, 12cqw); font-weight: 700; opacity: .7; line-height: 1.1; }
 .t-temp b { font-size: min(27cqh, 34cqw); font-weight: 800; line-height: 1; }
@@ -265,8 +265,8 @@
   font-size: min(11.5cqh, 13cqw); line-height: 1.3;
 }
 .t-row span { color: var(--muted); }
-.t-row.lost { background: var(--bad); color: #fff; }
-.t-row.lost span { color: #fff; }
+.t-row.lost { background: var(--bad); color: var(--on-accent); }
+.t-row.lost span { color: var(--on-accent); }
 .t-susp { grid-area: susp; position: relative; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
 .t-susp i {
   position: absolute; inset: 0; background: var(--accent);
@@ -297,7 +297,7 @@
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 5;
   max-width: calc(100% - 24px);
   padding: 10px 20px; border-radius: 14px; border: 1px solid var(--line);
-  background: rgba(0, 0, 0, .8); text-align: center; pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 85%, transparent); text-align: center; pointer-events: none;
   font-size: clamp(18px, 5vmin, 36px); font-weight: 700; line-height: 1.25;
 }
 .center-msg small { display: block; margin-top: 4px; font-size: clamp(12px, 2.6vmin, 16px); font-weight: 400; color: var(--muted); }
@@ -308,7 +308,7 @@
   left: 0; right: 0; top: calc(var(--rpm-h) + var(--gap) * 2); bottom: calc(var(--bar-h) + var(--gap));
   display: flex; align-items: center; justify-content: center;
   padding: 8px; overflow: auto;
-  background: rgba(0, 0, 0, .93);
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
 }
 .ov-card { max-width: 560px; width: 100%; margin: auto; padding: 4px 8px; }
 .ov-card h2 { margin: 0 0 4px; font-size: clamp(20px, 5.5vmin, 30px); }
@@ -332,8 +332,8 @@
   position: absolute; z-index: 20;
   left: var(--gap); right: var(--gap); bottom: calc(var(--bar-h) + var(--gap) * 2);
   max-height: 58%; overflow: hidden;
-  padding: 10px 14px 12px; border-radius: 12px;
-  background: #10141a; border: 1px solid var(--accent);
+  padding: 12px 16px 14px; border-radius: 20px;
+  background: var(--panel); border: 1px solid var(--accent);
   box-shadow: 0 6px 30px rgba(0, 0, 0, .7);
   cursor: pointer;
   font-size: clamp(14px, 3.6vmin, 18px); line-height: 1.35;
@@ -375,7 +375,7 @@
 }
 .menu-card {
   width: min(380px, 100%); max-height: 100%; overflow: auto; overscroll-behavior: contain;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 14px 16px;
 }
 /* 菜单里的输入框要能选字（面板整体禁止选中，防止误触） */
 .menu input { -webkit-user-select: text; user-select: text; width: 100%; font-size: 16px; }   /* 16px：iPhone 聚焦时不放大页面 */
@@ -428,7 +428,7 @@
 .seg button:first-child { border-radius: 8px 0 0 8px; }
 .seg button:last-child { border-radius: 0 8px 8px 0; }
 .seg button + button { border-left: none; }
-.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 /* 横屏：菜单变宽，页面链接排一行，各节分两栏流式排（不按行对齐，省高度） */
 @media (orientation: landscape) and (min-width: 700px) {
   .menu-card { width: min(800px, 100%); }
@@ -442,5 +442,8 @@
 .toast {
   position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60;
   max-width: calc(100% - 24px); padding: 8px 14px; border-radius: 10px;
-  background: #222831; border: 1px solid var(--line); font-size: 14px; text-align: center;
+  background: var(--panel-2); border: 1px solid var(--line); font-size: 14px; text-align: center;
 }
+
+/* 数字和技术读数用等宽（档位、车速这类大数字保持无衬线 + 等宽数字） */
+.t-temp b, .t-row b, .extras b, .sc-delta, .lap-rows .row.big span:last-child { font-family: var(--mono); }

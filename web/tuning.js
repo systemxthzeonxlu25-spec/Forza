@@ -700,7 +700,7 @@
       ctx.strokeStyle = col.bg;                            // 2px 底色描边，重叠时分得清
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.fillStyle = "#0d0f12";
+      ctx.fillStyle = cssVar("--on-accent");
       ctx.font = "bold 11px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
