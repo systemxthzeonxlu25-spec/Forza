@@ -288,11 +288,12 @@ class LapDetector:
             if (ev.boundaries == 0 and ev.family == "fh" and ev.saw_position and cur.lap_number == 0
                     and dist >= MIN_SPRINT_M):
                 # FH 冲刺赛：整段存成一条记录，是否跑完由保存方按路线长度判断
+                # 跑完冲刺赛马上点“重来”，和中途重开在时钟上看不出区别：这里不能因为 restart 就判成中断，
+                # 否则“跑完 → 重试”这种最常见的练习流程里，前面每次跑完的成绩都会作废。
+                # 是否跑完交给保存方按路线长度判断（短于已知最长距离的 95% 会标“放弃”）。
                 cur.flags.add("finish_inferred")
-                if interrupted:
-                    cur.flags.add("interrupted")
                 self._emit(cur, kind="sprint", lap_time=cur.last_t, time_source="measured",
-                           complete=not interrupted and "partial_start" not in cur.flags, reason=reason,
+                           complete="partial_start" not in cur.flags, reason=reason,
                            ended_epoch=self._last_race_epoch or None)
             elif not interrupted and ev.lap_lengths and dist >= FINAL_LAP_RATIO * statistics.median(ev.lap_lengths):
                 # 最后一圈游戏没给 LapNumber + 1，但距离够了，算完整圈（圈时自己量）

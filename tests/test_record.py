@@ -194,3 +194,24 @@ def test_buffer_off(tmp_path):
             assert c.post("/api/record/snapshot").status_code == 400
     finally:
         rt.shutdown()
+
+
+def test_recorder_write_failure_does_not_stop_decoding(tmp_path):
+    """磁盘写满之类的录像写入错误：停掉录制，但这个包和后面的包仍要解码、分发。"""
+    from forza.hub import Hub
+    from forza.recorder import Recorder
+
+    class Broken(Recorder):
+        def write(self, data, t=None):
+            raise OSError("disk full")
+
+    hub = Hub(recorder=Broken(tmp_path / "x.frec"))
+    got = []
+    hub.subscribe(got.append)
+    from tests.helpers import CircleStream
+    from forza.packet import encode
+    fr = CircleStream().run(1)[0]
+    hub.feed(encode(fr, fr.fmt))
+    hub.feed(encode(fr, fr.fmt))
+    assert hub.recorder is None
+    assert len(got) == 2

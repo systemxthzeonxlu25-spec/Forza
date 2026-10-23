@@ -201,7 +201,16 @@ class Hub:
         if self.ring is not None:
             self.ring.append(t, data)
         if self.recorder is not None:
-            self.recorder.write(data)
+            try:
+                self.recorder.write(data)
+            except OSError:
+                # 磁盘写满 / 文件被占用：停掉录制，别让它拖垮后面的解码和切圈
+                log.exception("写录像失败，已停止录制：%s", self.recorder.path)
+                rec, self.recorder = self.recorder, None
+                try:
+                    rec.close()
+                except OSError:
+                    pass
         for addr in self._fwd_addrs:
             try:
                 self._fwd_sock.sendto(data, addr)  # type: ignore[union-attr]

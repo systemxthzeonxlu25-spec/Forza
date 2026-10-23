@@ -19,8 +19,8 @@ def test_restart_near_finish_never_promotes_abandoned_run(horizon):
     det.flush()
     assert len(laps) == 1
     if horizon:
-        assert not laps[0].meta["is_complete"]
-        assert "interrupted" in laps[0].meta["flags"]
+        # FH 冲刺赛：重开前跑到 98% 与“跑完立刻重来”在时钟上无法区分，只能标成完赛推定，由保存方按路线长度裁决
+        assert "finish_inferred" in laps[0].meta["flags"]
     else:
         assert laps[0].meta["end_reason"] != "restart"
 

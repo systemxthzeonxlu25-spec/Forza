@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import laps as laps_api
@@ -28,6 +29,11 @@ from .config import WEB_DIR
 def create_app(rt) -> FastAPI:
     app = FastAPI(title="Forza 遥测", docs_url="/api/docs", redoc_url=None)
     app.state.rt = rt
+
+    @app.exception_handler(OverflowError)
+    async def _too_big(request: Request, exc: OverflowError):
+        # id 之类的参数大到 SQLite 的 64 位整数装不下，当成参数错误而不是服务器错误
+        return JSONResponse({"detail": "数值太大"}, status_code=400)
 
     @app.get("/api/status")
     def status(request: Request):

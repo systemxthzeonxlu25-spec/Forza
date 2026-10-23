@@ -252,3 +252,8 @@ def test_laps_page_has_new_sections(client):
     html = client.get("/laps.html").text
     for el in ('id="sectors-card"', 'id="setup-ctl"', 'id="extra-picker"'):
         assert el in html, el
+
+
+def test_huge_integer_params_are_400_not_500(client):
+    for url in ("/api/laps/99999999999999999999", "/api/laps?track_id=99999999999999999999"):
+        assert client.get(url).status_code in (400, 404)
