@@ -123,7 +123,8 @@
     const el = document.createElement("header");
     el.className = "hero";
     el.innerHTML = `<div class="hero-text"><h1>${h.title}</h1><p>${h.sub}</p></div>` +
-      `<div class="hero-art" aria-hidden="false">${ILLUS[key]("wob-" + key)}</div>`;
+      // 插画纯装饰：对读屏软件隐藏，标题和说明文字已经在左边了
+      `<div class="hero-art" aria-hidden="true">${ILLUS[key]("wob-" + key)}</div>`;
     main.prepend(el);
   }
 
