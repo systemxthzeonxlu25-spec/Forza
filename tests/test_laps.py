@@ -164,7 +164,10 @@ def test_sprint_finish_and_abandon(tmp_path):
     det.flush()
     laps = sorted(store.list_laps(), key=lambda l: l["id"])
     assert [l["kind"] for l in laps] == ["sprint"] * 3
-    assert [l["is_complete"] for l in laps] == [True, False, True]
+    # A pause followed directly by a clock reset is indistinguishable from a
+    # restart. Preserve that first run, but do not promote it to a complete PB.
+    assert [l["is_complete"] for l in laps] == [False, False, True]
+    assert "interrupted" in laps[0]["flags"]
     assert "abandoned" in laps[1]["flags"]
     assert len({l["track_id"] for l in laps}) == 1, "同一起点应识别为同一条路线"
     assert laps[0]["lap_time"] == pytest.approx(route / s.v, abs=0.1)

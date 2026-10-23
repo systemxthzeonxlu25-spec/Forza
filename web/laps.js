@@ -422,6 +422,10 @@
     if (f.includes("rewind")) out.push(`<span class="badge rewind" title="这圈中途倒过带">倒带</span>`);
     if (f.includes("abandoned")) out.push(`<span class="badge incomplete" title="冲刺赛中途退出">放弃</span>`);
     if (f.includes("dist_integrated")) out.push(`<span class="badge" title="游戏给的距离不可靠，改用车速积分算距离">距离估算</span>`);
+    if (f.includes("partial_start")) out.push(`<span class="badge incomplete" title="采集开始时这一圈已经在进行，缺少前段数据">中途接入</span>`);
+    if (f.includes("finish_inferred")) out.push(`<span class="badge" title="根据计时和距离估计完赛，尚未由游戏完赛画面核实">完赛推定</span>`);
+    if (f.includes("interrupted")) out.push(`<span class="badge incomplete" title="重开或切换事件前的记录，不参与最快圈">中断</span>`);
+    if (f.includes("rewound_after_save")) out.push(`<span class="badge incomplete" title="落盘后倒带跨回本圈，原成绩已失效">倒带失效</span>`);
     if (l.setup_id != null) {
       const nm = setupName(l.setup_id, l.setup_name);
       out.push(`<span class="badge setup" title="调校版本：${esc(nm)}">${esc(nm)}</span>`);

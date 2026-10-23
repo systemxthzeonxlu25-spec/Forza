@@ -63,7 +63,9 @@ class _LapBuf:
     def lap_t(self, fr: Frame) -> float:
         if not self.use_rt_clock and fr.current_lap <= 0 and fr.race_time - self.start_rt > 1.0:
             self.use_rt_clock = True
-        return fr.race_time - self.start_rt if self.use_rt_clock else fr.current_lap
+        # Keep samples during the first second while deciding whether CurrentLap
+        # is unavailable (common in point-to-point events).
+        return fr.race_time - self.start_rt if self.use_rt_clock or fr.current_lap <= 0 else fr.current_lap
 
     def truncate(self, t: float) -> None:
         """倒带：删掉圈内时间 > t 的采样。"""
@@ -75,6 +77,7 @@ class _LapBuf:
         self.int_dist = self.idist[-1] if self.idist else 0.0
         self.last_row_t = self.rows[-1][0] if self.rows else -1.0
         self.last_t = max(self.last_row_t, 0.0)
+        self.max_speed = max((row[2] for row in self.rows), default=0.0)
         self.flags.add("rewind")
 
 
@@ -95,6 +98,7 @@ class _Event:
     lap_lengths: list[float] = field(default_factory=list)
     best_time: float | None = None
     best_lap: LapData | None = None
+    emitted_meta: list[dict] = field(default_factory=list)  # Metadata only; no extra sample buffers.
 
 
 class LapDetector:
@@ -102,6 +106,7 @@ class LapDetector:
 
     def __init__(self, on_lap: Callable[[LapData], None] | None = None):
         self._listeners: list[Callable[[LapData], None]] = [on_lap] if on_lap else []
+        self._invalidation_listeners: list[Callable[[dict], None]] = []
         self.event: _Event | None = None
         self.cur: _LapBuf | None = None
         self.pending: _LapBuf | None = None
@@ -117,6 +122,9 @@ class LapDetector:
 
     def add_listener(self, fn: Callable[[LapData], None]) -> None:
         self._listeners.append(fn)
+
+    def add_invalidation_listener(self, fn: Callable[[dict], None]) -> None:
+        self._invalidation_listeners.append(fn)
 
     # ------------------------------------------------------------------
     def on_frame(self, fr: Frame) -> None:
@@ -181,6 +189,8 @@ class LapDetector:
         self.event = _Event(self._event_seq, fr.family, fr.game, fr.fmt, fr.car_ordinal, fr.pos_x, fr.pos_z)
         self.cur = self._new_buf(fr, fr.lap_number)
         self.cur.flags.add("first_lap")
+        if fr.current_lap > 1.0 or (fr.current_lap <= 0 and fr.race_time > 1.0):
+            self.cur.flags.add("partial_start")
         self.pending = None
         self._pending_end = None
 
@@ -217,6 +227,26 @@ class LapDetector:
         self.cur = self._new_buf(fr, fr.lap_number)
 
     def _rewind(self, fr: Frame) -> None:
+        # A rewind can reach beyond the pending window. Preserve those old
+        # samples for inspection, but invalidate every completed lap it erases.
+        ev = self.event
+        for meta in ev.emitted_meta:
+            if meta["lap_number"] >= fr.lap_number and "rewound_after_save" not in meta["flags"]:
+                meta["is_complete"] = False
+                meta["flags"].append("rewound_after_save")
+                for fn in self._invalidation_listeners:
+                    try:
+                        fn(meta)
+                    except Exception:
+                        log.exception("使倒带前的圈失效时出错")
+        if ev.best_lap is not None and not ev.best_lap.meta["is_complete"]:
+            ev.best_lap, ev.best_time = None, None
+        ev.lap_lengths = [m["distance_m"] for m in ev.emitted_meta
+                          if m["is_complete"] and m["kind"] == "lap"]
+        if self.pending and fr.lap_number < self.pending.lap_number:
+            self.pending = None
+            self._pending_end = None
+            self._pending_end_epoch = None
         if self.pending and fr.lap_number == self.pending.lap_number and fr.lap_number == self.cur.lap_number - 1:
             # 倒过了起终点线：扔掉新开的这圈，把上一圈拿回来接着记
             self.cur = self.pending
@@ -245,23 +275,31 @@ class LapDetector:
         if lap_time is None:
             lap_time = buf.last_t
             source = "measured"
-        self._emit(buf, kind="lap", lap_time=lap_time, time_source=source, complete=True, ended_epoch=end_epoch)
+        self._emit(buf, kind="lap", lap_time=lap_time, time_source=source,
+                   complete="partial_start" not in buf.flags, ended_epoch=end_epoch)
 
     def _end_event(self, reason: str) -> None:
         ev, cur = self.event, self.cur
         if self.pending:
             self._commit_pending()
+        interrupted = reason in {"restart", "car_or_format_changed", "lap_jump"}
         if ev and cur and cur.rows:
             dist = self._buf_distance(cur)
             if (ev.boundaries == 0 and ev.family == "fh" and ev.saw_position and cur.lap_number == 0
                     and dist >= MIN_SPRINT_M):
                 # FH 冲刺赛：整段存成一条记录，是否跑完由保存方按路线长度判断
+                cur.flags.add("finish_inferred")
+                if interrupted:
+                    cur.flags.add("interrupted")
                 self._emit(cur, kind="sprint", lap_time=cur.last_t, time_source="measured",
-                           complete=True, reason=reason, ended_epoch=self._last_race_epoch or None)
-            elif ev.lap_lengths and dist >= FINAL_LAP_RATIO * statistics.median(ev.lap_lengths):
+                           complete=not interrupted and "partial_start" not in cur.flags, reason=reason,
+                           ended_epoch=self._last_race_epoch or None)
+            elif not interrupted and ev.lap_lengths and dist >= FINAL_LAP_RATIO * statistics.median(ev.lap_lengths):
                 # 最后一圈游戏没给 LapNumber + 1，但距离够了，算完整圈（圈时自己量）
+                cur.flags.add("finish_inferred")
                 self._emit(cur, kind="lap", lap_time=cur.last_t, time_source="measured",
-                           complete=True, reason=reason, ended_epoch=self._last_race_epoch or None)
+                           complete="partial_start" not in cur.flags, reason=reason,
+                           ended_epoch=self._last_race_epoch or None)
             else:
                 self.dropped_partial += 1
                 log.info("丢弃未跑完的圈：第 %d 圈，%.0f m（%s）", cur.lap_number, dist, reason)
@@ -327,6 +365,7 @@ class LapDetector:
             ev.best_time = lap_time
             ev.best_lap = lap
         self.laps_emitted += 1
+        ev.emitted_meta.append(lap.meta)
         for fn in self._listeners:
             try:
                 fn(lap)
@@ -374,10 +413,29 @@ class LapSaver:
         self._lock = threading.Lock()
         self.saved_ids: list[int] = []
         self._listeners: list[Callable[[LapData], None]] = []
+        self._invalidation_listeners: list[Callable[[dict], None]] = []
 
     def add_listener(self, fn: Callable[[LapData], None]) -> None:
         """存好之后通知（meta 里已经有 id / track_id / session_id）。"""
         self._listeners.append(fn)
+
+    def add_invalidation_listener(self, fn: Callable[[dict], None]) -> None:
+        self._invalidation_listeners.append(fn)
+
+    def invalidate(self, meta: dict) -> None:
+        # Same worker queue as _save: even if a save is still pending, update
+        # its resulting row afterwards rather than racing the INSERT.
+        if self._pool:
+            self._pool.submit(self._invalidate, meta)
+        else:
+            self._invalidate(meta)
+
+    def _invalidate(self, meta: dict) -> None:
+        if meta.get("id") is None:
+            return
+        self.store.update_lap(meta["id"], is_complete=False, flags=meta["flags"])
+        for fn in self._invalidation_listeners:
+            fn(meta)
 
     def __call__(self, lap: LapData) -> None:
         if self.tag_setup:

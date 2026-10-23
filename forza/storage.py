@@ -378,11 +378,14 @@ class Store:
         rows = self._q(sql + " ORDER BY lap_time ASC LIMIT 1", args)
         return self.get_lap_meta(rows[0]["id"]) if rows else None
 
-    def update_lap(self, lap_id: int, *, note: str | None = None, is_complete: bool | None = None) -> None:
+    def update_lap(self, lap_id: int, *, note: str | None = None, is_complete: bool | None = None,
+                   flags: list[str] | None = None) -> None:
         if note is not None:
             self._x("UPDATE laps SET note=? WHERE id=?", (note, lap_id))
         if is_complete is not None:
             self._x("UPDATE laps SET is_complete=? WHERE id=?", (1 if is_complete else 0, lap_id))
+        if flags is not None:
+            self._x("UPDATE laps SET flags=? WHERE id=?", (json.dumps(flags, ensure_ascii=False), lap_id))
 
     def delete_lap(self, lap_id: int) -> None:
         self._x("DELETE FROM laps WHERE id=?", (lap_id,))

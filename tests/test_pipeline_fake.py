@@ -33,7 +33,7 @@ def circuit(tmp_path_factory):
     ("fh", None, "fh", "fh"),
     ("fh_legacy", None, "fh", "fh"),
     ("fh", 340, "fh", "fh"),            # 未知包长：自动探测成 Horizon 布局
-    ("fm2023_dash", 352, "fm", "fm2023"),
+    ("fm2023_dash", 352, "fm", "fm"),  # Extra bytes do not prove FM2023 extensions.
 ])
 def test_laps_match_truth_all_formats(tmp_path, fmt, size, family, game):
     p = tmp_path / "x.frec"

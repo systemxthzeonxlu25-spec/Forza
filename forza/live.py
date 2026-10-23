@@ -457,6 +457,20 @@ class LiveBroadcaster:
         self.invalidate()
         log.info("本圈小结：#%s %s", s["id"], s["summary"])
 
+    def on_lap_invalidated(self, meta: dict) -> None:
+        self._pb_ver += 1
+        self._pb_cache.clear()
+        self._pb_last.clear()
+        # Queue removal after any in-flight summary so it cannot reappear later.
+        self._submit(self._remove_summary, meta["id"])
+        self.invalidate()
+
+    def _remove_summary(self, lap_id: int) -> None:
+        self.summaries = deque((s for s in self.summaries if s.get("id") != lap_id),
+                               maxlen=self.summaries.maxlen)
+        self.last_summary = self.summaries[-1] if self.summaries else None
+        self.invalidate()
+
     def recent_summaries(self) -> list[dict]:
         """最近的小结，新的在前。"""
         return list(reversed(self.summaries))
@@ -614,7 +628,7 @@ class LiveBroadcaster:
         if ev is not None and ev.best_lap is not None and ev.best_time is not None:
             cands.append((float(ev.best_time), "best", ev.best_lap))
         pend = det.pending
-        if pend is not None and len(pend.rows) > 1:
+        if pend is not None and len(pend.rows) > 1 and "partial_start" not in pend.flags:
             # 挂起圈的圈时：和切圈器落盘时一样，优先用游戏给的 LastLap
             t = fr.last_lap if fr.lap_number == pend.lap_number + 1 and fr.last_lap > 0 else pend.last_t
             if t > 0:
@@ -725,6 +739,9 @@ class LiveBroadcaster:
         except Exception:
             log.exception("查询历史最快圈出错")
             res = {"state": "none", "reason": "查询出错"}
+        if key[-1] != self._pb_ver:
+            self._pb_jobs.discard(key)
+            return  # A save/invalidation superseded this query while it was running.
         for cache, k in ((self._pb_cache, key), (self._pb_last, key[:-1])):
             cache[k] = res
             while len(cache) > PB_CACHE_KEEP:

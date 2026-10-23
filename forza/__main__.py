@@ -29,7 +29,7 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _apply_common(cfg, args) -> None:
-    for name in ("udp_port", "http_port", "db_path", "game", "tire_temp_unit"):
+    for name in ("udp_host", "udp_port", "http_host", "http_port", "db_path", "game", "tire_temp_unit"):
         v = getattr(args, name, None)
         if v is not None:
             setattr(cfg, name, v)
@@ -113,6 +113,7 @@ def cmd_import(args) -> None:
         det = LapDetector()
         saver = LapSaver(store, f"import:{Path(f).name}", background=False)
         det.add_listener(saver)
+        det.add_invalidation_listener(saver.invalidate)
         hub.subscribe(det.on_frame)
         n = import_file(f, hub)
         det.flush()
@@ -187,8 +188,10 @@ def main(argv=None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp, http=True):
+        sp.add_argument("--udp-host", help="UDP 监听地址（仅本机采样可设 127.0.0.1）")
         sp.add_argument("--udp-port", type=int, help="UDP 端口（默认 5555）")
         if http:
+            sp.add_argument("--http-host", help="网页监听地址（仅本机访问可设 127.0.0.1）")
             sp.add_argument("--http-port", type=int, help="网页端口（默认 8000）")
         sp.add_argument("--game", choices=GAME_CHOICES, help="指定游戏（324 字节包分不出 FH4/5/6 时用）")
         sp.add_argument("--db", dest="db_path", help="数据库路径（默认 data/forza.db）")

@@ -69,7 +69,8 @@ class Frame:
     num_cylinders: int = 0
 
     # ---- Horizon 专有 12 字节（232~243） ----
-    # FH6 官方文档里叫 CarGroup / SmashableVelDiff / SmashableMass，类型未核实，只存原始值
+    # FH6 官方类型：U32 / F32 / F32；碰撞字段仍保留原始位模式，不作物理分析。
+    # FH4/5 尚需实机核对，不能仅凭包长套用 FH6 的字段类型。
     hzn_car_group: int | None = None
     hzn_raw1: int | None = None
     hzn_raw2: int | None = None

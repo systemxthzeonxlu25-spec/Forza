@@ -149,11 +149,20 @@ for _k, _n in _EXPECTED_SIZES.items():
 
 FORMAT_BY_SIZE: dict[int, PacketFormat] = {f.size: f for f in FORMATS.values()}
 
-# 未知包长时可以尝试的布局（按包长从长到短，能装下才试）
-_GUESS_CANDIDATES = ["fm2023_dash", "fh_legacy", "fm7_dash"]
+# FH6 documents integer puddle flags and unsigned CarGroup. The same packet
+# length cannot identify FH4/5/6, so only apply these types with explicit FH6.
+# SmashableVelDiff/Mass remain lossless U32 bit patterns in hzn_raw1/2.
+_FH6_FORMAT = PacketFormat(
+    "fh", "Horizon 6", "fh",
+    tuple((name, "i" if name.startswith("puddle#") else
+           "I" if name == "hzn_car_group" else code)
+          for name, code in FORMATS["fh"].fields), 244,
+)
 
-_INT_FIELDS = {n.split("#")[0] for f in FORMATS.values() for n, c in f.fields if c in "iIHBb"}
-
+# 未知包长只探测两个 Dash 起始偏移，能装下才试。
+_GUESS_CANDIDATES = ["fh_legacy", "fm7_dash"]
+# Speed can distinguish the two Dash offsets, not the meaning of trailing
+# bytes. Never infer FM2023 TireWear/TrackOrdinal from padding or extra bytes.
 
 def unpack(data: bytes, fmt: PacketFormat) -> dict:
     """按指定格式解包成 {字段名: 值}，四轮字段合并成 tuple。只读前 fmt.size 个字节。"""
@@ -173,7 +182,8 @@ def unpack(data: bytes, fmt: PacketFormat) -> dict:
 
 def build_frame(data: bytes, fmt: PacketFormat, *, game_override: str | None = None,
                 recv_time: float = 0.0) -> Frame:
-    d = unpack(data, fmt)
+    wire_fmt = _FH6_FORMAT if fmt.key == "fh" and game_override == "fh6" else fmt
+    d = unpack(data, wire_fmt)
     d["is_race_on"] = d["is_race_on"] == 1
     fr = Frame(**d)
     fr.fmt = fmt.key
@@ -190,9 +200,11 @@ def encode(frame: Frame, fmt_key: str, total_size: int | None = None) -> bytes:
 
     total_size 比格式长时在末尾补 0，用来模拟“未知包长”。
     """
-    fmt = FORMATS[fmt_key]
+    fmt = _FH6_FORMAT if fmt_key == "fh" and frame.game == "fh6" else FORMATS[fmt_key]
     vals = []
-    for name in fmt.names:
+    for name, code in fmt.fields:
+        if code == "x":
+            continue
         if "#" in name:
             base, idx = name.split("#")
             seq = getattr(frame, base)
@@ -203,8 +215,7 @@ def encode(frame: Frame, fmt_key: str, total_size: int | None = None) -> bytes:
                 v = 0
         if name == "is_race_on":
             v = 1 if v else 0
-        base = name.split("#")[0]
-        if base in _INT_FIELDS:
+        if code in "iIHBb":
             v = int(v)
         vals.append(v)
     raw = fmt.struct.pack(*vals)
@@ -250,6 +261,7 @@ class PacketDecoder:
         self._verify: dict[str, list[int]] = {}   # fmt -> [好, 坏]
         self.warnings: dict[str, str] = {}        # key -> 提示文字（给面板显示）
         self.too_short = 0
+        self.invalid_core = 0
 
     def decode(self, data: bytes, recv_time: float = 0.0) -> Frame | None:
         n = len(data)
@@ -261,6 +273,16 @@ class PacketDecoder:
                 return None
             fmt = self._guess_format(data)
         fr = build_frame(data, fmt, game_override=self.game_override, recv_time=recv_time)
+        if n not in FORMAT_BY_SIZE and fmt.family == "fm":
+            # Only the common Motorsport prefix is established for unknown sizes.
+            fr.game = resolve_game("sled", "fm", self.game_override)
+        if fmt.has_dash:
+            critical = ("speed", "distance", "race_time", "current_lap", "last_lap", "best_lap",
+                        "pos_x", "pos_y", "pos_z")
+            if any(not math.isfinite(getattr(fr, name)) for name in critical):
+                self.invalid_core += 1
+                self.warnings["invalid_core"] = "车速、距离、位置或计时含 NaN/Infinity，已丢弃异常帧"
+                return None
         if fmt.has_dash and n in FORMAT_BY_SIZE:
             self._verify_layout(fmt.key, fr)
         return fr
@@ -279,18 +301,17 @@ class PacketDecoder:
             if dash_plausible(fr):
                 st.votes[f.key] = st.votes.get(f.key, 0) + 1
         best = max(st.votes.items(), key=lambda kv: kv[1], default=(None, 0))
-        if best[0] and best[1] >= self.GUESS_VOTES_NEEDED:
+        runner_up = max((v for k, v in st.votes.items() if k != best[0]), default=0)
+        if best[0] and best[1] >= self.GUESS_VOTES_NEEDED and best[1] - runner_up >= 5:
             st.decided = best[0]
             self.warnings[f"guess_{n}"] = (
                 f"未知包长 {n} 字节，已按「{FORMATS[best[0]].label}」布局解析（Speed 校验 {best[1]} 次通过）"
             )
             log.warning(self.warnings[f"guess_{n}"])
             return FORMATS[best[0]]
-        # 还没攒够票：先用当前得票最多的；都没票时，够长就按 Horizon 猜
-        if best[0]:
-            return FORMATS[best[0]]
+        # 未确认之前只交出公共物理字段，不能把猜测的圈时/踏板写进数据库。
         self.warnings[f"guess_{n}"] = f"未知包长 {n} 字节，正在自动探测布局（车动起来才能判断）"
-        return FORMATS["fh_legacy"] if n >= 323 else FORMATS["fm7_dash"]
+        return FORMATS["sled"]
 
     def _verify_layout(self, key: str, fr: Frame) -> None:
         ok = dash_plausible(fr)

@@ -67,12 +67,14 @@ class Runtime:
         self.detector = LapDetector()
         self.saver = LapSaver(self.store, source)
         self.detector.add_listener(self._on_lap)
+        self.detector.add_invalidation_listener(self.saver.invalidate)
         self.hub.subscribe(self.detector.on_frame)
 
         # 实时推送（手机面板）；新圈存好后算本圈小结
         self.live = LiveBroadcaster(self)
         self.hub.subscribe(self.live.on_frame)
         self.saver.add_listener(self.live.on_lap_saved)
+        self.saver.add_invalidation_listener(self.live.on_lap_invalidated)
 
     def _on_lap(self, lap: LapData) -> None:
         for fn in list(PRE_SAVE_HOOKS):
