@@ -182,7 +182,9 @@ class Runtime:
             "laps": self.detector.status(),
             "udp_port": self.cfg.udp_port,
             "http_port": self.cfg.http_port,
-            "lan_ips": lan_ips(),
+            # 用实时推送模块里后台刷新的缓存：这个方法在事件循环里跑（/api/status 是 async 路由），
+            # 直接调 lan_ips() 的话缓存过期那一下会同步做 DNS 查询，卡住收包
+            "lan_ips": self.live.lan_ips_cached(),
             "replay": self.replay_path,
             # 已经写进数据库的圈数 / 最新一圈 id：网页轮询发现变化就自动刷新圈列表
             "saved_count": len(self.saver.saved_ids),

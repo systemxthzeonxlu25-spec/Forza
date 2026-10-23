@@ -755,9 +755,14 @@ class LiveBroadcaster:
                 "car_pi": best["car_pi"], "pi_match": pi_match, "rd": c[1], "rt": c[2], "integrated": c[3]}
 
     # ---------------- 状态 ----------------
-    def _lan_ips(self) -> list[str]:
+    def lan_ips_cached(self) -> list[str]:
+        """局域网 IP（缓存）。在事件循环里调用，不能卡收包：
+
+        平时只读 run() 在后台线程里定期刷新的结果。只有程序刚启动、后台还没刷过一次时同步查一次——
+        这时 netinfo 自己的缓存刚被启动横幅填过，很快返回。
+        """
         if self._ips is None:
-            self._ips = lan_ips()   # 第一次同步查；之后由 run() 在后台刷新
+            self._ips = lan_ips()
         return self._ips
 
     def _status_block(self) -> dict:
@@ -784,7 +789,7 @@ class LiveBroadcaster:
             "replay": getattr(self.rt, "replay_path", None),
             "udp_port": cfg.udp_port,
             "http_port": cfg.http_port,
-            "lan_ips": self._lan_ips(),
+            "lan_ips": self.lan_ips_cached(),
             "clients": len(self.clients),
         }
         self._status_cache = (now, ver, st)

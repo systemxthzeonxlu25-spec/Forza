@@ -5,7 +5,9 @@ config.toml 示例见 config.example.toml。
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
+import math
 import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -17,6 +19,23 @@ WEB_DIR = ROOT / "web"
 
 # 指向“本机”的地址：转发目标是这些地址 + 自己的 UDP 端口时，包会转回给自己，无限循环
 _SELF_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1", ""}
+
+
+def _is_self_host(host: str, self_hosts: set[str]) -> bool:
+    """转发目标 host 是不是本机（包发过去会被自己的 UDP 监听收到）。
+
+    - 主机名不区分大小写（LOCALHOST 也是本机），IPv6 地址可能带方括号：比较前统一一下；
+    - IP 地址按网段判断：整个 127.0.0.0/8（127.0.0.2 也是回环）、::1、0.0.0.0 都算本机。
+    不做 DNS 解析（启动时查 DNS 可能卡很久）：别名指向本机的主机名查不出来，只能防住常见写法。
+    """
+    h = host.strip().strip("[]").lower()
+    if h in self_hosts:
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_unspecified
 
 
 class ConfigError(ValueError):
@@ -55,7 +74,9 @@ class Config:
 
         def number(name: str, lo: float, allow_eq: bool = True) -> None:
             v = getattr(self, name)
-            ok = isinstance(v, (int, float)) and not isinstance(v, bool) and (v >= lo if allow_eq else v > lo)
+            # TOML 允许写 inf / nan：要求是有限数（无限长的缓冲区会让状态接口序列化 JSON 时出错）
+            ok = (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                  and (v >= lo if allow_eq else v > lo))
             if not ok:
                 cmp = "≥" if allow_eq else ">"
                 raise ConfigError(f"{name} 要是 {cmp} {lo:g} 的数字，现在是 {v!r}")
@@ -89,8 +110,7 @@ class Config:
             host, sep, port_s = str(item).rpartition(":")
             if not sep or not port_s.isdigit() or not 0 < int(port_s) <= 65535:
                 raise ConfigError(f'forward 里的 {item!r} 格式不对，要写成 "主机:端口"，例如 "127.0.0.1:20777"')
-            # 主机名不区分大小写（LOCALHOST 也是本机），IPv6 地址可能带方括号：比较前统一一下
-            if int(port_s) == self.udp_port and host.strip("[]").lower() in self_hosts:
+            if int(port_s) == self.udp_port and _is_self_host(host, self_hosts):
                 raise ConfigError(f"forward 里的 {item!r} 指向本程序自己的 UDP 端口 {self.udp_port}："
                                   "转发出去的包会被自己再收到，无限循环。换成别的程序的端口")
 

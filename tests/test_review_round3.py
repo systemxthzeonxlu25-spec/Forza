@@ -149,6 +149,9 @@ def test_detector_status_has_no_side_effects():
     ({"forward": ["localhost:5555"]}, "无限循环"),
     ({"forward": ["LOCALHOST:5555"]}, "无限循环"),                     # 主机名不区分大小写
     ({"forward": ["[::1]:5555"]}, "无限循环"),
+    ({"forward": ["127.0.0.2:5555"]}, "无限循环"),                    # 整个 127.0.0.0/8 都是回环
+    ({"record_buffer_minutes": float("inf")}, "record_buffer_minutes"),   # TOML 允许写 inf
+    ({"live_hz": float("nan")}, "live_hz"),
 ])
 def test_config_validate_rejects(kwargs, words):
     with pytest.raises(ConfigError, match=words):
@@ -270,3 +273,33 @@ def test_rewind_invalidation_recomputes_reference_length(tmp_path):
     saver.invalidate(meta)
     assert not store.get_lap_meta(flying[0]["id"])["is_complete"]
     assert store.get_track(track_id)["ref_length_m"] == pytest.approx(lap_len, rel=0.01)
+
+
+def test_reference_length_survives_many_recent_first_laps(tmp_path):
+    """最近存了很多起步圈（反复单圈重开），更早的飞驰圈仍然要用来定参考圈长，不能被当成“没有飞驰圈”清掉。"""
+    import json
+    store = Store(tmp_path / "t.db")
+    tid = store.find_or_create_track(family="fh", game="fh5", kind="circuit", track_ordinal=None,
+                                     start_x=0, start_z=0, length_m=3000)
+
+    def add(dist, flags):
+        store.execute("INSERT INTO laps (track_id, kind, is_complete, distance_m, flags) VALUES (?, 'lap', 1, ?, ?)",
+                      (tid, dist, json.dumps(flags)))
+
+    for d in (3000, 3010, 2990):
+        add(d, [])
+    for _ in range(100):
+        add(3300, ["first_lap"])
+    assert store.refresh_circuit_length(tid, clear_if_empty=True) == pytest.approx(3000.0)
+    assert store.get_track(tid)["ref_length_m"] == pytest.approx(3000.0)
+
+
+def test_status_does_not_query_network_on_event_loop(cfg):
+    """/api/status 跑在事件循环里：只能读缓存的局域网 IP，不能同步做网络 / DNS 查询。"""
+    rt = Runtime(cfg)
+    rt.live.lan_ips_cached()                            # 启动时那一次（之后由后台线程刷新）
+    with mock.patch("forza.live.lan_ips", side_effect=AssertionError("不该同步查")), \
+            mock.patch("forza.runtime.lan_ips", side_effect=AssertionError("不该同步查")):
+        st = rt.status()
+    assert isinstance(st["lan_ips"], list)
+    rt.shutdown()

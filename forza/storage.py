@@ -275,9 +275,13 @@ class Store:
           留着旧值会让后面的圈拿一个已经不存在的圈长去匹配赛道。清空后按暂定圈长（或不看圈长）匹配，
           等下一圈飞驰圈存进来再重新定。
         """
-        rows = self._q("SELECT distance_m, flags FROM laps WHERE track_id=? AND kind='lap' AND is_complete=1 "
-                       "AND distance_m > 0 ORDER BY id DESC LIMIT ?", (track_id, recent * 3))
-        dists = [r["distance_m"] for r in rows if "first_lap" not in parse_flags(r["flags"])][:recent]
+        # 先在 SQL 里排除起步圈再 LIMIT：要是先取最近 N 行再过滤，最近全是起步圈（反复单圈重开）时
+        # 会一圈都剩不下，误以为没有飞驰圈（clear_if_empty 时还会把有效的参考圈长清掉）。
+        # flags 存的是 JSON 数组文本（如 ["first_lap", "rewind"]），按带引号的整词匹配。
+        rows = self._q("SELECT distance_m FROM laps WHERE track_id=? AND kind='lap' AND is_complete=1 "
+                       "AND distance_m > 0 AND COALESCE(flags, '') NOT LIKE '%\"first_lap\"%' "
+                       "ORDER BY id DESC LIMIT ?", (track_id, recent))
+        dists = [r["distance_m"] for r in rows]
         if not dists:
             if clear_if_empty:
                 self.set_track_length(track_id, None)
