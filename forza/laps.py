@@ -547,6 +547,9 @@ class LapSaver:
                 if sid is None:
                     sid = st.create_session(m["game"], m["fmt"], self.source, m["car_ordinal"], track_id)
                     self._sessions[m["event_id"]] = sid
+                elif track_id is not None:
+                    # 本场第一圈是中途接入、没认出赛道（track_id = None）时，会话用后面第一圈认出来的赛道补上
+                    st.execute("UPDATE sessions SET track_id=? WHERE id=? AND track_id IS NULL", (track_id, sid))
             m["session_id"] = sid
             lap_id = st.save_lap(lap)
             if kind == "circuit" and track_id is not None and m.get("is_complete") and not first_lap:
@@ -565,12 +568,21 @@ class LapSaver:
 
         中途接入的圈（partial_start）只有后半段数据，距离是半截的：
         - 赛道赛：起终点线位置是对的（过线时记下的），但不能拿半截长度去比圈长、更不能用它建暂定圈长，
-          所以按“不看圈长”去找；找不到就建一条不带长度的赛道，等飞驰圈来了再定参考圈长。
+          所以只看位置：附近正好一条赛道就归它；附近有好几条（共用起终点线的不同布局，光看位置分不出来）
+          就不归到任何赛道（track_id = None），免得随便挂到一个错的布局上；附近一条都没有就建一条不带长度的赛道，
+          等飞驰圈来了再定参考圈长。
         - 冲刺赛：连起点都是中途的某个位置，认不出是哪条路线，干脆不归到任何路线（track_id = None）。
+        有赛道 ID（FM2023）的游戏不受影响：按 ID 认，和长度无关。
         """
         st = self.store
-        if partial and kind == "sprint" and not m.get("track_ordinal"):
-            return None
+        if partial and not m.get("track_ordinal"):
+            if kind == "sprint":
+                return None
+            near = st.nearby_track_ids(family=m["family"], kind=kind, start_x=m["start_x"], start_z=m["start_z"])
+            if len(near) > 1:
+                return None
+            if len(near) == 1:
+                return near[0]
         length = None if partial else m["distance_m"]
         return st.find_or_create_track(
             family=m["family"], game=m["game"], kind=kind, track_ordinal=m.get("track_ordinal"),

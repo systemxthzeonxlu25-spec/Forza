@@ -90,7 +90,8 @@ class Config:
         number("record_buffer_minutes", 0)
         if str(self.tire_temp_unit).upper() not in ("F", "C"):
             raise ConfigError(f'tire_temp_unit 只能是 "F" 或 "C"，现在是 {self.tire_temp_unit!r}')
-        if self.game is not None and self.game not in PROFILES:
+        # 先确认是字符串：TOML 里写成 game = ["fh6"] 时列表不能拿去查字典（会抛 TypeError 而不是给出中文提示）
+        if self.game is not None and (not isinstance(self.game, str) or self.game not in PROFILES):
             raise ConfigError(f"game 不认识：{self.game!r}，可选：{', '.join(PROFILES)}")
         self._validate_forward()
 

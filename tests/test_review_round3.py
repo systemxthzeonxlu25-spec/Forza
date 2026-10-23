@@ -152,6 +152,7 @@ def test_detector_status_has_no_side_effects():
     ({"forward": ["127.0.0.2:5555"]}, "无限循环"),                    # 整个 127.0.0.0/8 都是回环
     ({"record_buffer_minutes": float("inf")}, "record_buffer_minutes"),   # TOML 允许写 inf
     ({"live_hz": float("nan")}, "live_hz"),
+    ({"game": ["fh6"]}, "game"),                                        # 写成列表：给中文提示，不抛 TypeError
 ])
 def test_config_validate_rejects(kwargs, words):
     with pytest.raises(ConfigError, match=words):
@@ -303,3 +304,25 @@ def test_status_does_not_query_network_on_event_loop(cfg):
         st = rt.status()
     assert isinstance(st["lan_ips"], list)
     rt.shutdown()
+
+
+def test_partial_lap_on_shared_start_line_is_left_unassigned():
+    """中途接入的半圈、起终点线附近有两条布局（光看位置分不出）：不归到任何赛道，会话由后面认出的整圈补上。"""
+    store = Store(":memory:")
+    s = CircleStream(track_ordinal=None)
+    kw = dict(family=s.family, game=s.game, kind="circuit", track_ordinal=None, start_x=0.0, start_z=-s.R)
+    short = store.find_or_create_track(length_m=s.lap_len * 0.6, **kw)     # 同一起点线的另一个布局
+    right = store.find_or_create_track(length_m=s.lap_len, **kw)
+    assert len(store.nearby_track_ids(family=s.family, kind="circuit", start_x=0.0, start_z=-s.R)) == 2
+
+    saver = LapSaver(store, "udp:test", background=False)
+    det = LapDetector(saver)
+    s.run(s.lap_len / s.v * 1.5)                                          # 本工具还没开
+    for f in s.run(s.lap_len / s.v * 2.2):
+        det.on_frame(f)
+    det.flush()
+    laps = sorted(store.list_laps(), key=lambda l: l["id"])
+    assert "partial_start" in laps[0]["flags"] and laps[0]["track_id"] is None
+    assert all(l["track_id"] == right for l in laps[1:]) and short != right
+    sess = store.list_sessions()
+    assert len(sess) == 1 and sess[0]["track_id"] == right
