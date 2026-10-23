@@ -149,9 +149,9 @@ for _k, _n in _EXPECTED_SIZES.items():
 
 FORMAT_BY_SIZE: dict[int, PacketFormat] = {f.size: f for f in FORMATS.values()}
 
-# FH6 documents integer puddle flags and unsigned CarGroup. The same packet
-# length cannot identify FH4/5/6, so only apply these types with explicit FH6.
-# SmashableVelDiff/Mass remain lossless U32 bit patterns in hzn_raw1/2.
+# FH6 官方文档里积水字段是整数、CarGroup 是无符号整数。
+# 同样 324 字节的包分不出 FH4 / FH5 / FH6，所以只有用户明确指定 --game fh6 时才按这套类型解析。
+# SmashableVelDiff / SmashableMass 仍按 U32 原样保留位模式（hzn_raw1 / hzn_raw2），不做物理换算。
 _FH6_FORMAT = PacketFormat(
     "fh", "Horizon 6", "fh",
     tuple((name, "i" if name.startswith("puddle#") else
@@ -161,8 +161,8 @@ _FH6_FORMAT = PacketFormat(
 
 # 未知包长只探测两个 Dash 起始偏移，能装下才试。
 _GUESS_CANDIDATES = ["fh_legacy", "fm7_dash"]
-# Speed can distinguish the two Dash offsets, not the meaning of trailing
-# bytes. Never infer FM2023 TireWear/TrackOrdinal from padding or extra bytes.
+# “Speed ≈ 速度向量模长”只能分辨 Dash 段从哪里开始，判断不了末尾多出来的字节是什么意思，
+# 所以绝不拿多出来的字节去猜 FM2023 的轮胎磨损 / 赛道 ID。
 
 def unpack(data: bytes, fmt: PacketFormat) -> dict:
     """按指定格式解包成 {字段名: 值}，四轮字段合并成 tuple。只读前 fmt.size 个字节。"""
@@ -274,7 +274,7 @@ class PacketDecoder:
             fmt = self._guess_format(data)
         fr = build_frame(data, fmt, game_override=self.game_override, recv_time=recv_time)
         if n not in FORMAT_BY_SIZE and fmt.family == "fm":
-            # Only the common Motorsport prefix is established for unknown sizes.
+            # 未知包长只能确认 FM 系列共有的前半段，具体是哪一代不知道，游戏按 Sled 口径识别
             fr.game = resolve_game("sled", "fm", self.game_override)
         if fmt.has_dash:
             critical = ("speed", "distance", "race_time", "current_lap", "last_lap", "best_lap",

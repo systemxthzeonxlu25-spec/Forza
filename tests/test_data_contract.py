@@ -1,8 +1,8 @@
-"""Independent byte fixtures; never call packet.encode() or reuse its field tables.
+"""包格式契约测试：用独立手写的字节偏移造包，绝不调用 packet.encode()、也不复用它的字段表。
 
-Offsets derived from Forza Support's FM and FH6 Data Out field declarations.
-FH4/5 use the existing 12-byte Horizon shift as an explicit, unverified assumption.
-These are constructed packets, NOT game captures.
+偏移按 Forza 官方支持页面上 FM 和 FH6 的 Data Out 字段声明推出来。
+FH4 / FH5 沿用现有的“Horizon 多 12 字节”偏移，这是一个明确写出来、但还没实机核实的假设。
+这里的包都是手工构造的，不是从游戏里抓的。
 """
 import struct
 
@@ -82,7 +82,7 @@ def test_fh6_documented_integer_fields():
     f = PacketDecoder("fh6").decode(bytes(b))
     assert f.puddle == (1, 0, 1, 0)
     assert f.hzn_car_group == 0xF0000001
-    # Collision floats intentionally remain lossless raw bit patterns.
+    # 碰撞相关的两个 float 故意按原始位模式保留（不做换算，不丢信息）
     assert f.hzn_raw1 == struct.unpack("<I", struct.pack("<f", 3.5))[0]
     assert f.hzn_raw2 == struct.unpack("<I", struct.pack("<f", 200))[0]
 

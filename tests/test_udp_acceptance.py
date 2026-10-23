@@ -1,6 +1,6 @@
-"""Real loopback UDP/HTTP/WebSocket, using independently constructed packets.
+"""本机回环上的真实 UDP / HTTP / WebSocket 链路验收，包是独立手工构造的。
 
-No public listener, no Forza process, no claim of real-game validation.
+只监听本机，不需要开 Forza，也不代表已经用真实游戏验证过。
 """
 import asyncio
 import json
@@ -27,7 +27,7 @@ from tests.test_data_contract import raw_dash
 
 
 def _packets(size):
-    """Three 500-m laps lasting 20, 22, 21 seconds, then 1 s of the next lap."""
+    """三圈各 500 m，分别用时 20、22、21 秒，再跑下一圈的 1 秒。"""
     shift = 12 if size == 324 else 0
     elapsed = 0
     for lap, duration in enumerate((20, 22, 21, 20)):
@@ -92,7 +92,7 @@ def test_real_udp_database_compare_and_live(tmp_path, size, game):
                     if i % 20 == 0:
                         await _until(lambda: rt.hub.packets == i)
                 await _until(lambda: rt.hub.packets == len(packets))
-                # Ensure an actual WebSocket frame reaches the client.
+                # 确认客户端真的收到了一条 WebSocket 消息
                 async with asyncio.timeout(10):
                     while True:
                         msg = _strict_json(await ws.recv())
@@ -125,7 +125,7 @@ def test_real_udp_database_compare_and_live(tmp_path, size, game):
                 assert comp["totals"]["delta_t_end_s"] == pytest.approx(2, abs=0.1)
                 assert np.mean(comp["channels"]["ref"]["speed"]) == pytest.approx(90)
                 assert np.mean(comp["channels"]["other"]["speed"]) == pytest.approx(500 / 22 * 3.6, abs=0.01)
-            # Decode and cut the saved raw bytes again into a fresh SQLite DB.
+            # 把录下来的原始包重新解码、切圈，存进一个全新的 SQLite 库，结果要和实时的一致
             offline = Store(tmp_path / "import.db")
             hub = Hub(game)
             saver = LapSaver(offline, "import:synthetic.frec", background=False)

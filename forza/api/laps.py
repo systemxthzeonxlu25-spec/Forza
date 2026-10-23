@@ -90,6 +90,12 @@ def _add_best_info(store, laps: list[dict]) -> list[dict]:
     return laps
 
 
+def _refresh_track_length(store, meta: dict) -> None:
+    """圈被删掉 / 改了“完整”标记之后，赛道赛的参考圈长（飞驰圈距离中位数）要跟着重算。"""
+    if meta.get("track_id") is not None and meta.get("kind") == "lap":
+        store.refresh_circuit_length(meta["track_id"])
+
+
 # ---------------------------------------------------------------- 圈
 
 @router.get("/laps")
@@ -130,19 +136,22 @@ def lap_reference(request: Request, lap_id: int):
 @router.patch("/laps/{lap_id}")
 def patch_lap(request: Request, lap_id: int, body: LapPatch):
     store = _store(request)
-    _lap_meta_or_404(store, lap_id)
+    meta = _lap_meta_or_404(store, lap_id)
     if body.note is None and body.is_complete is None:
         raise HTTPException(400, "没有要改的内容（可以改 note 或 is_complete）")
     note = body.note.strip() if body.note is not None else None
     store.update_lap(lap_id, note=note, is_complete=body.is_complete)
+    if body.is_complete is not None:
+        _refresh_track_length(store, meta)
     return jsonable(_add_best_info(store, [store.get_lap_meta(lap_id)])[0])
 
 
 @router.delete("/laps/{lap_id}")
 def delete_lap(request: Request, lap_id: int):
     store = _store(request)
-    _lap_meta_or_404(store, lap_id)
+    meta = _lap_meta_or_404(store, lap_id)
     store.delete_lap(lap_id)
+    _refresh_track_length(store, meta)
     return {"ok": True, "id": lap_id}
 
 

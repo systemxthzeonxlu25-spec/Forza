@@ -844,7 +844,7 @@
       : "没开内存缓冲";
     setHTML(E.recState, rec.recording
       ? `<b class="bad">● 录制中</b> ${fmtInt(rec.packets)} 个包<br><span class="path mono">${esc(rec.path)}</span>`
-      : `没在录制 · ${esc(buf)}`);
+      : (rec.error ? `<b class="bad">${esc(rec.error)}</b><br>` : "") + `没在录制 · ${esc(buf)}`);   // 写失败自动停录时说清楚原因
     const why = rec.snapshot_disabled;
     E.btnSnap.disabled = !!why || !(rec.buffer_packets > 0);
     for (const b of document.querySelectorAll("#set-snap button")) {

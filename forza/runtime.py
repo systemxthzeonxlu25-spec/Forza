@@ -172,6 +172,7 @@ class Runtime:
                                   "没有开环形缓冲（record_buffer_minutes = 0）" if self.hub.ring is None else None),
             "rec_dir": str(self._rec_dir()),
             "last_snapshot": self.last_snapshot,
+            "error": self.hub.record_error,          # 录制中途写失败时的原因（否则 None）
         }
 
     def status(self) -> dict:

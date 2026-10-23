@@ -1,4 +1,4 @@
-"""Adversarial state transitions absent from the original generator scenarios."""
+"""切圈器的刁钻状态转换：假数据生成器原有场景里没覆盖到的情况（中途接入、深度倒带、异步存档竞争等）。"""
 import numpy as np
 import pytest
 
@@ -55,7 +55,7 @@ def test_missing_current_lap_keeps_first_second_of_samples():
 
 def test_attach_mid_lap_does_not_produce_complete_reference():
     s = CircleStream()
-    s.run_dist(s.lap_len * 0.5)  # Application was not listening yet.
+    s.run_dist(s.lap_len * 0.5)  # 这段时间本工具还没开始收包
     laps = []
     det = LapDetector(laps.append)
     for f in s.run_dist(s.lap_len):
@@ -96,7 +96,7 @@ def test_deep_rewind_invalidates_already_saved_pb_and_summary(cfg):
         assert saved["is_complete"]
         assert rt.store.best_lap(saved["track_id"]) is not None
         assert rt.live.last_summary["id"] == saved["id"]
-        s.rewind(16)  # Beyond the 12-second pending window, back over the line.
+        s.rewind(16)  # 退得比 12 秒挂起窗口还远，倒回到起终点线之前
         for f in s.run(4):
             rt.hub.feed(encode(f, "fm2023_dash"))
         rt.saver.wait()
@@ -128,7 +128,7 @@ def test_deep_rewind_during_async_save_is_not_lost(cfg, monkeypatch):
         for f in s.run_dist(s.lap_len + 40 * 14):
             rt.hub.feed(encode(f, "fm2023_dash"))
         assert started.wait(5)
-        # INSERT is blocked: invalidation must queue behind it.
+        # 写库（INSERT）被卡住：作废操作必须排在它后面
         s.rewind(16)
         for f in s.run(4):
             rt.hub.feed(encode(f, "fm2023_dash"))
@@ -149,7 +149,7 @@ def test_rewind_past_pending_lap_does_not_commit_erased_future_lap():
     for f in s.run_dist(s.lap_len * 2.1):
         det.on_frame(f)
     assert len(laps) == 1 and det.pending.lap_number == 1
-    s.rewind(4.5)  # Back to lap 0, across both the pending and committed laps.
+    s.rewind(4.5)  # 退回第 0 圈：同时跨过挂起圈和已落盘的圈
     det.on_frame(s.step())
     det.flush()
     assert len(laps) == 1 and not laps[0].meta["is_complete"]

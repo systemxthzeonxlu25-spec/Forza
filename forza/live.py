@@ -461,7 +461,7 @@ class LiveBroadcaster:
         self._pb_ver += 1
         self._pb_cache.clear()
         self._pb_last.clear()
-        # Queue removal after any in-flight summary so it cannot reappear later.
+        # 删除小结也丢进后台队列：排在正在生成的小结之后，免得刚删掉又被生成出来
         self._submit(self._remove_summary, meta["id"])
         self.invalidate()
 
@@ -569,9 +569,7 @@ class LiveBroadcaster:
             return None
         det = self.rt.detector
         ev, cur = det.event, det.cur
-        st_kind = None
-        if ev is not None:
-            st_kind = "circuit" if ev.boundaries else ("sprint?" if ev.family == "fh" and ev.saw_position else "lap")
+        st_kind = det.event_kind()
         in_lap = ev is not None and cur is not None and cur.lap_number == fr.lap_number
         lap_t = cur.last_t if in_lap else (fr.current_lap if fr.current_lap > 0 else None)
         first_lap = bool(in_lap and "first_lap" in cur.flags and st_kind != "sprint?")
@@ -680,7 +678,7 @@ class LiveBroadcaster:
             elif ev.lap_lengths:
                 length, tol = ev.lap_lengths[0], None
             elif det.pending is not None:
-                length, tol = det._buf_distance(det.pending), None
+                length, tol = det.buf_distance(det.pending), None
             else:
                 length, tol = None, None
             q.update(kind="circuit", x=ev.line_x, z=ev.line_z, length_m=length, length_tol=tol)

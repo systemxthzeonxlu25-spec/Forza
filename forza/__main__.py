@@ -17,7 +17,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from .config import load_config
+from .config import ConfigError, load_config
 from .profiles import PROFILES
 
 GAME_CHOICES = [k for k in PROFILES if k not in ("fm", "fh")]
@@ -35,6 +35,7 @@ def _apply_common(cfg, args) -> None:
             setattr(cfg, name, v)
     if getattr(args, "forward", None):
         cfg.forward = args.forward
+    cfg.validate()        # 命令行覆盖完再统一检查一遍（不对就抛 ConfigError，main() 里转成中文提示）
 
 
 def cmd_serve(args) -> None:
@@ -70,6 +71,9 @@ def cmd_record(args) -> None:
         try:
             while args.duration is None or time.monotonic() - t0 < args.duration:
                 await asyncio.sleep(2)
+                if hub.recorder is None:      # 写文件失败，Hub 已经自动停了录制：别假装还在录
+                    print(f"  {hub.record_error or '录制已停止'}", flush=True)
+                    break
                 st = hub.status()
                 print(f"  已收 {st['packets']} 包，{st['pps']:.0f} 包/秒，格式 {st['format_label'] or '-'}",
                       flush=True)
@@ -182,7 +186,7 @@ def _fmt_time(s: float | None) -> str:
     return f"{int(m)}:{sec:06.3f}"
 
 
-def main(argv=None) -> None:
+def main(argv=None) -> int | None:
     p = argparse.ArgumentParser(prog="python -m forza", description="Forza Data Out 遥测分析工具")
     p.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -250,7 +254,11 @@ def main(argv=None) -> None:
 
     args = p.parse_args(argv)
     _setup_logging(args.verbose)
-    args.func(args)
+    try:
+        args.func(args)
+    except ConfigError as e:
+        print(f"配置有误：{e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
