@@ -24,8 +24,9 @@
     muted: cssVar("--muted", "#8b929c"),
     line: cssVar("--line", "#2c313a"),
     panel2: cssVar("--panel-2", "#20242b"),
+    halo: cssVar("--halo", "#0d0f12"),
   };
-  const GRID = "rgba(255,255,255,0.06)";
+  const GRID = cssVar("--grid", "rgba(255,255,255,0.06)");
   const DPR = () => window.devicePixelRatio || 1;
 
   function hexRgb(hex) {
@@ -960,7 +961,7 @@
             ctx.fillStyle = alpha(COL.a, 0.07);
             ctx.fillRect(x0, top, x1 - x0, height);
           }
-          ctx.fillStyle = "rgba(255,255,255,0.05)";
+          ctx.fillStyle = alpha(COL.text, 0.06);
           for (const s of res.segments) {
             if (s.kind !== "corner") continue;
             const x0 = u.valToPos(s.start_m, "x", true), x1 = u.valToPos(s.end_m, "x", true);
@@ -1380,9 +1381,9 @@
       const lb = c.label || c.name;
       const tw = ctx.measureText(lb).width + 8;
       const on = c.name === S.selSeg;
-      ctx.fillStyle = on ? COL.text : "rgba(13,15,18,0.82)";
+      ctx.fillStyle = on ? COL.text : alpha(COL.halo, 0.85);
       roundRect(ctx, lx - tw / 2, ly - 9, tw, 18, 5); ctx.fill();
-      ctx.fillStyle = on ? "#0d0f12" : COL.text;
+      ctx.fillStyle = on ? COL.halo : COL.text;
       ctx.fillText(lb, lx, ly + 0.5);
     }
     drawMapOverlay();
@@ -1417,7 +1418,7 @@
           const [px, py] = mapPosAt(side === "ref" ? "a" : "b", d);
           shapePath(ctx, shape, px, py, r);
           ctx.fillStyle = col; ctx.fill();
-          ctx.lineWidth = 1.5; ctx.strokeStyle = "#0d0f12"; ctx.stroke();
+          ctx.lineWidth = 1.5; ctx.strokeStyle = COL.halo; ctx.stroke();
         }
       }
     }
@@ -1460,7 +1461,7 @@
       const [px, py] = mapPosAt(side, d);
       ctx.beginPath(); ctx.arc(px, py, MAP.zoomed ? 5 : 7, 0, Math.PI * 2);
       ctx.fillStyle = col; ctx.fill();
-      ctx.lineWidth = 3; ctx.strokeStyle = "#0d0f12"; ctx.stroke();
+      ctx.lineWidth = 3; ctx.strokeStyle = COL.halo; ctx.stroke();
     }
   }
 

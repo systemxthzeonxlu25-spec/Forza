@@ -58,6 +58,7 @@
       PAGES.map((p) => `<a href="${p.href}" class="${p.key === active ? "active" : ""}">${p.label}</a>`).join("") +
       `<span class="spacer"></span><span class="muted" id="nav-status"><span class="status-dot"></span>无数据</span>`;
     document.body.prepend(el);
+    if (!document.body.classList.contains("live-page")) addThemeButton(el);   // 实时面板固定深色
     const st = el.querySelector("#nav-status");
     async function poll() {
       try {
@@ -73,6 +74,25 @@
     }
     poll();
     setInterval(poll, 2000);
+  }
+
+  // 主题切换：跟随系统 → 浅色 → 深色 → 跟随系统。选择存在 localStorage，theme.js 在 <head> 里恢复。
+  const THEME_LABEL = { auto: "跟随系统", light: "浅色", dark: "深色" };
+  function addThemeButton(nav) {
+    const btn = document.createElement("button");
+    btn.className = "theme-btn";
+    const cur = () => document.documentElement.getAttribute("data-theme") || "auto";
+    const paint = () => { btn.textContent = THEME_LABEL[cur()]; btn.title = "切换主题"; };
+    btn.addEventListener("click", () => {
+      const next = { auto: "light", light: "dark", dark: "auto" }[cur()];
+      if (next === "auto") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", next);
+      try { next === "auto" ? localStorage.removeItem("forza-theme") : localStorage.setItem("forza-theme", next); } catch (_) { /* 忽略 */ }
+      paint();
+      location.reload();     // 图表（canvas / uPlot）的颜色在页面加载时取一次，重载最省事
+    });
+    paint();
+    nav.appendChild(btn);
   }
 
   // 新圈落盘广播：saved_count 变大时派发 window 事件 "forza:laps-changed"（第一次轮询只记录、不派发）。

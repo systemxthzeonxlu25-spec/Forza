@@ -1,21 +1,85 @@
-/* 全站公用样式：颜色变量、顶部导航、基础排版。各页面自己的样式写在各自的 css 里。 */
+/* 全站公用样式：颜色变量、顶部导航、基础排版。各页面自己的样式写在各自的 css 里。
+   视觉方向：暖象牙底色 + 近黑文字 + 陶土橙强调色，标题用衬线体，边框是细线、几乎没有阴影。
+   主题：默认跟随系统（浅色 / 深色），导航栏右侧的按钮可以手动切换，选择记在浏览器里。
+   实时面板固定用深色（夜里放在游戏旁边不刺眼），见 live.css。 */
 :root {
-  --bg: #0d0f12;
-  --panel: #171a1f;
-  --panel-2: #20242b;
-  --line: #2c313a;
-  --text: #e8eaed;
-  --muted: #8b929c;
-  --accent: #4ea1ff;      /* 主色 / 圈 A */
-  --accent-2: #ff9f43;    /* 对比色 / 圈 B */
-  --good: #2ecc71;        /* 变快 / 正常 */
-  --bad: #ff5c5c;         /* 变慢 / 异常 */
-  --warn: #f5c542;
-  --throttle: #2ecc71;
-  --brake: #ff5c5c;
-  --radius: 10px;
+  --bg: #faf9f5;          /* 页面底色（象牙） */
+  --panel: #f3f1e8;       /* 卡片 */
+  --panel-2: #e9e6da;     /* 卡片里的小块、进度条底 */
+  --field: #ffffff;       /* 输入框 / 下拉框 */
+  --line: #dedbce;
+  --text: #141413;
+  --muted: #6f6d64;
+  --accent: #c6613f;      /* 主色 / 圈 A（陶土橙） */
+  --accent-2: #4f86b8;    /* 对比色 / 圈 B（天蓝） */
+  --on-accent: #ffffff;   /* 压在 accent / accent-2 色块上的文字 */
+  --good: #5d7a3a;        /* 变快 / 正常（橄榄绿） */
+  --bad: #b8433a;         /* 变慢 / 异常 */
+  --warn: #a9741a;
+  --gain: #3f8576;        /* 赚时间（青绿，红绿色盲也分得开） */
+  --neutral: #b4b1a4;
+  --throttle: #5d7a3a;
+  --brake: #b8433a;
+  --grid: rgba(20, 20, 19, 0.08);       /* 图表网格线 */
+  --halo: #faf9f5;                       /* 图表里压在彩色线条下的描边 */
+  --shadow: 0 1px 2px rgba(20, 20, 19, 0.04);
+  --radius: 12px;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --serif: "Tiempos Headline", "Tiempos Text", Charter, "Iowan Old Style", "Palatino Linotype", Georgia,
+           "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "Noto Serif SC", serif;
+  --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color-scheme: light;
+}
+
+/* 深色：同一套暖色调，不是纯黑 */
+:root[data-theme="dark"],
+.live-page {
+  --bg: #1b1b19;
+  --panel: #262624;
+  --panel-2: #30302d;
+  --field: #1f1f1d;
+  --line: #3d3d39;
+  --text: #faf9f5;
+  --muted: #a3a197;
+  --accent: #d97757;
+  --accent-2: #6a9bcc;
+  --on-accent: #1b1b19;
+  --good: #8aa66a;
+  --bad: #e0695d;
+  --warn: #e0a64a;
+  --gain: #7fb5a6;
+  --neutral: #6b6a63;
+  --throttle: #8aa66a;
+  --brake: #e0695d;
+  --grid: rgba(250, 249, 245, 0.07);
+  --halo: #1b1b19;
+  --shadow: none;
   color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1b19;
+    --panel: #262624;
+    --panel-2: #30302d;
+    --field: #1f1f1d;
+    --line: #3d3d39;
+    --text: #faf9f5;
+    --muted: #a3a197;
+    --accent: #d97757;
+    --accent-2: #6a9bcc;
+    --on-accent: #1b1b19;
+    --good: #8aa66a;
+    --bad: #e0695d;
+    --warn: #e0a64a;
+    --gain: #7fb5a6;
+    --neutral: #6b6a63;
+    --throttle: #8aa66a;
+    --brake: #e0695d;
+    --grid: rgba(250, 249, 245, 0.07);
+    --halo: #1b1b19;
+    --shadow: none;
+    color-scheme: dark;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -23,24 +87,37 @@ html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--sans);
   font-size: 15px;
-  line-height: 1.45;
+  line-height: 1.55;
   -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
 }
+h1, h2, h3, h4 { font-family: var(--serif); font-weight: 500; letter-spacing: -0.01em; line-height: 1.25; }
 a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 button, select, input {
   font: inherit;
   color: var(--text);
-  background: var(--panel-2);
+  background: var(--field);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 6px 10px;
 }
-button { cursor: pointer; }
-button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+input:focus, select:focus { border-color: var(--accent); outline: none; }
+button {
+  cursor: pointer;
+  background: transparent;
+  border-radius: 999px;
+  padding: 6px 14px;
+  transition: background-color .15s, border-color .15s, color .15s;
+}
+button:hover { background: var(--panel-2); border-color: var(--muted); }
+button.primary { background: var(--text); border-color: var(--text); color: var(--bg); }
+button.primary:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
@@ -52,44 +129,54 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .topnav {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  background: var(--panel);
+  gap: 2px;
+  padding: 10px 20px;
+  background: var(--bg);
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
   white-space: nowrap;
+  scrollbar-width: none;
 }
-.topnav .brand { font-weight: 700; margin-right: 8px; }
+.topnav::-webkit-scrollbar { display: none; }
+.topnav .brand { font-family: var(--serif); font-size: 19px; font-weight: 500; letter-spacing: -0.01em; margin-right: 18px; }
 .topnav a {
   color: var(--muted);
-  padding: 6px 10px;
-  border-radius: 8px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 14px;
 }
 .topnav a.active { color: var(--text); background: var(--panel-2); }
 .topnav a:hover { text-decoration: none; color: var(--text); }
-.topnav .spacer { flex: 1; }
+.topnav .spacer { flex: 1; min-width: 12px; }
+.topnav #nav-status { font-size: 13px; }
 .topnav .status-dot {
-  width: 9px; height: 9px; border-radius: 50%;
-  background: var(--muted); display: inline-block; margin-right: 6px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--neutral); display: inline-block; margin-right: 6px;
 }
 .topnav .status-dot.on { background: var(--good); }
 .topnav .status-dot.stale { background: var(--warn); }
+.topnav .theme-btn { margin-left: 10px; padding: 4px 10px; font-size: 13px; color: var(--muted); flex: 0 0 auto; }
 
-.page { max-width: 1200px; margin: 0 auto; padding: 16px; }
+.page { max-width: 1200px; margin: 0 auto; padding: 28px 24px 48px; }
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 14px;
-  margin-bottom: 14px;
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+  margin-bottom: 16px;
 }
-.card h2, .card h3 { margin: 0 0 10px; font-size: 16px; }
+.card h2, .card h3 { margin: 0 0 10px; font-size: 20px; }
+.card h3 { font-size: 17px; }
 table { border-collapse: collapse; width: 100%; }
-th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; }
 th { color: var(--muted); font-weight: 500; font-size: 13px; }
 
 @media (max-width: 600px) {
-  .page { padding: 10px; }
+  .page { padding: 16px 12px 36px; }
+  .card { padding: 14px; }
+  .topnav { padding: 8px 12px; }
+  .topnav .brand { margin-right: 10px; }
 }
 
 /* 带 hidden 属性的元素一律隐藏（否则页面里给元素设了 display 会把 hidden 盖掉） */

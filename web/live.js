@@ -129,7 +129,7 @@
 
   // ======================= 颜色 =======================
   // 胎温 → 颜色：冷蓝 → 理想绿 → 偏热黄 → 过热红
-  const C_COLD = [59, 130, 246], C_OK = [46, 204, 113], C_WARM = [245, 197, 66], C_HOT = [255, 77, 77];
+  const C_COLD = [106, 155, 204], C_OK = [138, 166, 106], C_WARM = [224, 166, 74], C_HOT = [224, 105, 93];
   const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
   function tireColor(c) {
     let rgb;
@@ -370,17 +370,17 @@
     for (let g = 0.5; g <= G_RANGE + 1e-6; g += 0.5) {
       ctx.beginPath();
       ctx.arc(c, c, g * k, 0, Math.PI * 2);
-      ctx.strokeStyle = g === 1 ? "#4a5260" : "#2a2f37";
+      ctx.strokeStyle = g === 1 ? "#55554f" : "#3d3d39";
       ctx.lineWidth = g === 1 ? 1.5 : 1;
       ctx.stroke();
     }
     ctx.beginPath();
     ctx.moveTo(c - R, c); ctx.lineTo(c + R, c);
     ctx.moveTo(c, c - R); ctx.lineTo(c, c + R);
-    ctx.strokeStyle = "#2a2f37"; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = "#3d3d39"; ctx.lineWidth = 1; ctx.stroke();
     const fs = Math.max(9, Math.round(s * 0.075));
     ctx.font = `${fs}px system-ui, sans-serif`;
-    ctx.fillStyle = "#6b7280";
+    ctx.fillStyle = "#a3a197";
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     ctx.fillText("加速", c, 3);
@@ -404,7 +404,7 @@
       const a = (gTrail[i][0] - cutoff) / (G_TRAIL_S * 1000);
       const [x0, y0] = pt(gTrail[i - 1][1], gTrail[i - 1][2]);
       const [x1, y1] = pt(gTrail[i][1], gTrail[i][2]);
-      ctx.strokeStyle = `rgba(78,161,255,${(a * 0.8).toFixed(2)})`;
+      ctx.strokeStyle = `rgba(217,119,87,${(a * 0.8).toFixed(2)})`;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     }
     // 当前点 + 数值
@@ -412,10 +412,10 @@
       const [x, y] = pt(f.g_lat, f.g_long);
       ctx.beginPath();
       ctx.arc(x, y, Math.max(4, s * 0.045), 0, Math.PI * 2);
-      ctx.fillStyle = "#e8eaed";
+      ctx.fillStyle = "#faf9f5";
       ctx.fill();
       const tot = Math.hypot(f.g_lat, f.g_long);
-      ctx.fillStyle = "#c8ccd2";
+      ctx.fillStyle = "#d6d4cb";
       ctx.textAlign = "left"; ctx.textBaseline = "top";
       ctx.font = `600 ${Math.round(fs * 1.15)}px ui-monospace, Consolas, monospace`;
       ctx.fillText(tot.toFixed(2), 2, 2);

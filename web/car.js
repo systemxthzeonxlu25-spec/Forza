@@ -21,7 +21,7 @@
     line: cssVar("--line", "#2c313a"),
     panel: cssVar("--panel", "#171a1f"),
   };
-  const GRID = "rgba(255,255,255,0.06)";
+  const GRID = cssVar("--grid", "rgba(255,255,255,0.06)");
   const num = (v) => typeof v === "number" && isFinite(v);
   const fmtS = (v, d = 3) => (num(v) ? v.toFixed(d) : "--");
   const fmtInt = (v) => (num(v) ? String(Math.round(v)) : "--");
@@ -379,7 +379,7 @@
     let svg = "";
     if (num(c.noise_threshold_s) && num(c.a.median_time)) {
       const x0 = X(c.a.median_time - c.noise_threshold_s), x1 = X(c.a.median_time + c.noise_threshold_s);
-      svg += `<rect x="${x0}" y="8" width="${Math.max(1, x1 - x0)}" height="64" rx="3" fill="rgba(255,255,255,0.10)"><title>A 中位数 ± 噪音范围 ${c.noise_threshold_s.toFixed(3)} s</title></rect>`;
+      svg += `<rect x="${x0}" y="8" width="${Math.max(1, x1 - x0)}" height="64" rx="3" fill="currentColor" fill-opacity="0.10"><title>A 中位数 ± 噪音范围 ${c.noise_threshold_s.toFixed(3)} s</title></rect>`;
     }
     for (const r of rows) {
       svg += `<text class="lbl" x="4" y="${r.y + 4}">${r.tag}</text>`;

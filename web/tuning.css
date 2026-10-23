@@ -92,7 +92,7 @@
 .fd.flash { box-shadow: 0 0 0 2px var(--accent); }
 .fd-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
 .fd-num { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; border-radius: 50%;
-  font-size: 12px; font-weight: 700; color: #0d0f12; }
+  font-size: 12px; font-weight: 700; color: var(--on-accent); }
 .fd-num.sev-alert { background: var(--bad); }
 .fd-num.sev-warn { background: var(--warn); }
 .fd-num.sev-info { background: var(--accent); }
@@ -198,7 +198,7 @@
 .tn-heat thead th { color: var(--muted); font-size: 12px; text-align: center; padding: 0 0 2px; }
 .tn-heat thead th:first-child { text-align: left; }
 .tn-heat td { min-width: 70px; text-align: center; padding: 6px 6px; border-radius: 4px; color: var(--text); }
-.tn-heat td.dark { color: #0d0f12; font-weight: 600; }
+.tn-heat td.dark { color: var(--on-accent); font-weight: 600; }
 .tn-heat td.na { color: var(--muted); }
 .tn-heat-legend { margin-top: 8px; font-size: 12px; color: var(--muted); }
 .tn-heat-scale { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }

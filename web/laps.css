@@ -1,9 +1,5 @@
 /* 圈速对比页（laps.html）自己的样式。颜色都用 common.css 里的变量；
-   圈 A = --accent，圈 B = --accent-2；丢时间 = --bad，赚时间 = --gain（青色，红绿色盲也分得开） */
-:root {
-  --gain: #2ec4b6;
-  --neutral: #5d6470;
-}
+   圈 A = --accent（陶土橙），圈 B = --accent-2（天蓝）；丢时间 = --bad，赚时间 = --gain（青绿，红绿色盲也分得开） */
 
 .laps-page { max-width: 1440px; }
 /* .filters / .cmp-grid 等写了 display，会盖过 hidden 属性，这里统一兜底 */
@@ -12,7 +8,7 @@
 .grow { flex: 1; }
 .tag-a, .tag-b {
   display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 5px;
-  text-align: center; color: #0d0f12; font-weight: 700;
+  text-align: center; color: var(--on-accent); font-weight: 700;
 }
 .tag-a { background: var(--accent); }
 .tag-b { background: var(--accent-2); }
@@ -21,7 +17,7 @@
 .card-head h2, .card-head h3 { margin: 0; }
 
 .small-btn { padding: 3px 9px; font-size: 13px; border-radius: 7px; }
-.small-btn.on { border-color: var(--accent); color: var(--text); background: rgba(78, 161, 255, 0.14); }
+.small-btn.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 button.link {
   background: none; border: none; padding: 2px 4px; color: var(--accent); font-size: 13px;
 }
@@ -36,7 +32,7 @@ button.link.danger { color: var(--bad); }
   font-family: var(--mono); font-size: 13px; background: var(--panel-2);
   padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line);
 }
-.state-card.error, .cmp-state.error { border-color: rgba(255, 92, 92, 0.5); }
+.state-card.error, .cmp-state.error { border-color: color-mix(in srgb, var(--bad) 50%, transparent); }
 .cmp-state {
   padding: 18px; margin-bottom: 14px; border-radius: var(--radius);
   background: var(--panel); border: 1px dashed var(--line); color: var(--muted);
@@ -63,9 +59,9 @@ button.link.danger { color: var(--bad); }
 .lap-table { font-size: 14px; }
 .lap-table thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; white-space: nowrap; }
 .lap-table td { white-space: nowrap; vertical-align: middle; }
-.lap-table tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
-.lap-table tr.row-a { background: rgba(78, 161, 255, 0.08); }
-.lap-table tr.row-b { background: rgba(255, 159, 67, 0.08); }
+.lap-table tbody tr:hover { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.lap-table tr.row-a { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.lap-table tr.row-b { background: color-mix(in srgb, var(--accent-2) 8%, transparent); }
 .lap-table .c-pick { width: 34px; text-align: center; padding: 4px 2px; }
 .lap-table .c-num { width: 44px; }
 .lap-table .c-time, .lap-table .c-delta { font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -85,19 +81,19 @@ button.link.danger { color: var(--bad); }
 }
 .pick:hover span { border-color: var(--muted); }
 .pick input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 1px; }
-.pick-a input:checked + span { background: var(--accent); border-color: var(--accent); color: #0d0f12; }
-.pick-b input:checked + span { background: var(--accent-2); border-color: var(--accent-2); color: #0d0f12; }
+.pick-a input:checked + span { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.pick-b input:checked + span { background: var(--accent-2); border-color: var(--accent-2); color: var(--on-accent); }
 
 .badge {
   display: inline-block; font-size: 11px; line-height: 1; padding: 3px 6px; margin: 0 3px 0 0;
   border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
 }
-.badge.best { color: var(--warn); border-color: rgba(245, 197, 66, 0.45); }
-.badge.incomplete { color: var(--bad); border-color: rgba(255, 92, 92, 0.45); }
-.badge.rewind { color: var(--warn); border-color: rgba(245, 197, 66, 0.35); }
-.badge.sprint { color: var(--accent); border-color: rgba(78, 161, 255, 0.45); }
+.badge.best { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.badge.incomplete { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.badge.rewind { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.badge.sprint { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .badge.setup {
-  color: #c9b8ff; border-color: rgba(170, 140, 255, 0.45); max-width: 160px;
+  color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 45%, transparent); max-width: 160px;
   overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
 }
 
@@ -124,7 +120,7 @@ button.link.danger { color: var(--bad); }
 .sec-table .c-std .bar { display: block; height: 4px; margin-top: 3px; background: var(--panel-2); border-radius: 2px; overflow: hidden; max-width: 140px; }
 .sec-table .c-std .bar i { display: block; height: 100%; background: var(--warn); border-radius: 2px; }
 .sec-table .c-std .disp { display: block; font-size: 11px; margin-top: 2px; white-space: normal; }
-.sec-table tr.worst td { background: rgba(245, 197, 66, 0.07); }
+.sec-table tr.worst td { background: color-mix(in srgb, var(--warn) 7%, transparent); }
 .sec-table tr.worst .c-std .mono { color: var(--warn); font-weight: 700; }
 .sec-name-input { width: 120px; padding: 3px 6px; font-size: 13px; }
 .sec-matrix td, .sec-matrix th { text-align: center; padding: 5px 7px; }
@@ -189,7 +185,7 @@ button.link.danger { color: var(--bad); }
 .extra-picker .chk { color: var(--text); }
 .chart-hint { margin-top: 6px; }
 #charts .uplot { width: 100%; }
-#charts .u-select { background: rgba(78, 161, 255, 0.12); }
+#charts .u-select { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 
 /* ---------------- 赛道图 ---------------- */
 .map-wrap { position: relative; width: 100%; }
@@ -212,8 +208,8 @@ button.link.danger { color: var(--bad); }
   display: grid; grid-template-columns: 44px minmax(0, 1fr) 74px; gap: 8px; align-items: start;
   padding: 8px 6px; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 6px;
 }
-.seg-row:hover { background: rgba(255, 255, 255, 0.04); }
-.seg-row.on { background: rgba(78, 161, 255, 0.12); box-shadow: inset 3px 0 0 var(--accent); }
+.seg-row:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.seg-row.on { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
 .seg-name { font-weight: 700; font-size: 15px; }
 .seg-name small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
 .seg-text { font-size: 13.5px; line-height: 1.4; }
