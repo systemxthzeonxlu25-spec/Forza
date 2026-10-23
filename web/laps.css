@@ -19,7 +19,7 @@
 .small-btn { padding: 3px 9px; font-size: 13px; border-radius: 7px; }
 .small-btn.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 button.link {
-  background: none; border: none; padding: 2px 4px; color: var(--accent); font-size: 13px;
+  background: none; border: none; padding: 2px 4px; color: var(--accent-text); font-size: 13px;
 }
 button.link:hover { text-decoration: underline; }
 button.link.danger { color: var(--bad); }
@@ -91,7 +91,7 @@ button.link.danger { color: var(--bad); }
 .badge.best { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .badge.incomplete { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .badge.rewind { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
-.badge.sprint { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.badge.sprint { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .badge.setup {
   color: var(--accent-2); border-color: color-mix(in srgb, var(--accent-2) 45%, transparent); max-width: 160px;
   overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
@@ -114,7 +114,7 @@ button.link.danger { color: var(--bad); }
 .sec-table .c-seg { font-weight: 700; }
 .sec-table .c-seg small { margin-left: 4px; font-weight: 400; }
 .sec-table .c-seg .sec-name { font-weight: 700; color: var(--text); font-size: 14px; padding: 2px 0; }
-.sec-table .c-seg .sec-name:hover { color: var(--accent); }
+.sec-table .c-seg .sec-name:hover { color: var(--accent-text); }
 .sec-table .c-time, .sec-table .c-med { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .sec-table .c-std { min-width: 150px; }
 .sec-table .c-std .bar { display: block; height: 4px; margin-top: 3px; background: var(--panel-2); border-radius: 2px; overflow: hidden; max-width: 140px; }
@@ -170,7 +170,7 @@ button.link.danger { color: var(--bad); }
   display: flex; gap: 4px 14px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 4px;
 }
 .readout b { font-weight: 600; }
-.readout .va { color: var(--accent); }
+.readout .va { color: var(--accent-text); }
 .readout .vb { color: var(--accent-2); }
 .readout .loss { color: var(--bad); }
 .readout .gain { color: var(--gain); }
@@ -216,7 +216,7 @@ button.link.danger { color: var(--bad); }
 .seg-text.flat { color: var(--muted); }
 .seg-nums { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .seg-nums .nw { white-space: nowrap; display: inline-block; margin-right: 12px; }
-.seg-nums .va { color: var(--accent); }
+.seg-nums .va { color: var(--accent-text); }
 .seg-nums .vb { color: var(--accent-2); }
 .seg-dt { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 14px; font-weight: 600; }
 .seg-dt.loss { color: var(--bad); }
@@ -231,7 +231,7 @@ button.link.danger { color: var(--bad); }
 /* ---------------- 新圈提示 ---------------- */
 .toast {
   position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 50;
-  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 10px;
+  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: var(--radius-sm);
   background: var(--panel-2); border: 1px solid var(--accent); color: var(--text); font-size: 14px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }

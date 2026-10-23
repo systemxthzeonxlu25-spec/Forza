@@ -1,7 +1,6 @@
 /* 车辆调校页（car.html）。颜色变量来自 common.css；版本 A = --accent（陶土橙），版本 B = --accent-2（天蓝），和对比页一致。 */
 
 .car-page { max-width: 1200px; }
-.car-page h1 { font-size: 20px; margin: 0; }
 .car-page h2 { font-size: 16px; margin: 0; }
 .small { font-size: 13px; }
 .grow { flex: 1; }
@@ -14,7 +13,7 @@
 .car-msg { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
 .car-msg.err { color: var(--bad); }
 .small-btn { padding: 4px 10px; font-size: 13px; border-radius: 7px; white-space: nowrap; }
-button.link { background: none; border: none; padding: 2px 4px; color: var(--accent); font-size: 13px; }
+button.link { background: none; border: none; padding: 2px 4px; color: var(--accent-text); font-size: 13px; }
 button.link:hover { text-decoration: underline; }
 button[disabled] { opacity: .6; cursor: progress; }
 .tag-a, .tag-b {
@@ -35,7 +34,7 @@ button[disabled] { opacity: .6; cursor: progress; }
 /* ---------------- 新建版本 ---------------- */
 .setup-form {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 12px;
 }
 .setup-form input { background: var(--panel); }
 .setup-form-btns { display: flex; gap: 8px; }
@@ -45,7 +44,7 @@ button[disabled] { opacity: .6; cursor: progress; }
 /* ---------------- 版本列表 ---------------- */
 .setup-list { display: flex; flex-direction: column; gap: 8px; }
 .setup-row {
-  border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 11px 14px; background: var(--panel-2);
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: start;
 }
 .setup-row.current { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
@@ -53,7 +52,7 @@ button[disabled] { opacity: .6; cursor: progress; }
 .setup-name strong { font-size: 15px; overflow-wrap: anywhere; }
 .setup-name .note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .badge-cur {
-  font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent);
+  font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent-text);
   white-space: nowrap; line-height: 1.6;
 }
 .setup-stats { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 16px; font-size: 13px; color: var(--muted); }
@@ -67,7 +66,7 @@ button[disabled] { opacity: .6; cursor: progress; }
 /* ---------------- 版本对比 ---------------- */
 .cmp-out { margin-top: 14px; }
 .verdict {
-  border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--line);
   background: var(--panel-2); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
 }
 .verdict .big { font-size: 22px; font-weight: 700; white-space: nowrap; }

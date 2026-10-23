@@ -79,7 +79,7 @@
   overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 20px;
   container-type: size;
   transition: opacity .25s;
 }
@@ -332,7 +332,7 @@
   position: absolute; z-index: 20;
   left: var(--gap); right: var(--gap); bottom: calc(var(--bar-h) + var(--gap) * 2);
   max-height: 58%; overflow: hidden;
-  padding: 10px 14px 12px; border-radius: 12px;
+  padding: 12px 16px 14px; border-radius: 20px;
   background: var(--panel); border: 1px solid var(--accent);
   box-shadow: 0 6px 30px rgba(0, 0, 0, .7);
   cursor: pointer;
@@ -375,7 +375,7 @@
 }
 .menu-card {
   width: min(380px, 100%); max-height: 100%; overflow: auto; overscroll-behavior: contain;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 14px 16px;
 }
 /* 菜单里的输入框要能选字（面板整体禁止选中，防止误触） */
 .menu input { -webkit-user-select: text; user-select: text; width: 100%; font-size: 16px; }   /* 16px：iPhone 聚焦时不放大页面 */
@@ -444,3 +444,6 @@
   max-width: calc(100% - 24px); padding: 8px 14px; border-radius: 10px;
   background: var(--panel-2); border: 1px solid var(--line); font-size: 14px; text-align: center;
 }
+
+/* 数字和技术读数用等宽（档位、车速这类大数字保持无衬线 + 等宽数字） */
+.t-temp b, .t-row b, .extras b, .sc-delta, .lap-rows .row.big span:last-child { font-family: var(--mono); }

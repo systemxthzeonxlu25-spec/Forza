@@ -1,6 +1,5 @@
 /* 调车诊断页（tuning.html）。颜色变量来自 common.css。 */
 
-.tn h1 { font-size: 20px; margin: 0; }
 .tn h2 { font-size: 15px; margin: 0 0 10px; }
 .tn-small { font-size: 13px; }
 .tn code { font-family: var(--mono); font-size: 13px; background: var(--panel-2); padding: 1px 5px; border-radius: 5px; }
@@ -33,9 +32,9 @@
 .tn-head-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 12px; }
 .tn-head-title strong { font-size: 17px; }
 .tn-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; }
-.tn-stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.tn-stat { background: var(--panel-2); border-radius: var(--radius-sm); padding: 8px 10px; min-width: 0; }
 .tn-stat .k { color: var(--muted); font-size: 12px; }
-.tn-stat .v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tn-stat .v { font-family: var(--mono); font-size: 15.5px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .tn-stat .v small { font-weight: 400; color: var(--muted); font-size: 12px; }
 .tn-tires { display: grid; grid-template-columns: auto auto; gap: 1px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .tn-tires .hot { color: var(--warn); }
@@ -68,7 +67,7 @@
   font-weight: 600; border: 1px solid currentColor; white-space: nowrap; line-height: 1.6; }
 .badge.sev-alert { color: var(--bad); }
 .badge.sev-warn { color: var(--warn); }
-.badge.sev-info { color: var(--accent); }
+.badge.sev-info { color: var(--accent-text); }
 .badge::before { content: ""; width: 7px; height: 7px; background: currentColor; }
 .badge.sev-alert::before { clip-path: polygon(50% 0, 100% 100%, 0 100%); width: 9px; height: 8px; }
 .badge.sev-warn::before { transform: rotate(45deg); width: 6px; height: 6px; }
@@ -101,7 +100,7 @@
 .fd-locs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .fd-loc { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--panel-2); max-width: 100%;
   overflow-wrap: anywhere; text-align: left; }
-.fd-loc.on { border-color: var(--accent); color: var(--accent); }
+.fd-loc.on { border-color: var(--accent); color: var(--accent-text); }
 .fd-loc-wrap { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; max-width: 100%; }
 .fd-cmp { font-size: 12px; white-space: nowrap; }
 .fd-cmp::after { content: " ›"; }
@@ -113,7 +112,7 @@
 .fd-ev li { font-size: 14px; font-variant-numeric: tabular-nums; }
 .fd-ev li.sub { list-style: none; margin-left: -4px; color: var(--muted); font-size: 13px; }
 .fd-ev li.rule { color: var(--muted); }
-.fd-basis { margin-top: 10px; background: var(--panel-2); border-radius: 8px; padding: 8px 12px; }
+.fd-basis { margin-top: 10px; background: var(--panel-2); border-radius: var(--radius-sm); padding: 10px 14px; }
 .fd-basis summary { cursor: pointer; font-weight: 600; font-size: 14px; }
 .fd-basis dl { margin: 8px 0 2px; font-size: 14px; }
 .fd-basis dt { color: var(--muted); font-size: 12px; margin-top: 8px; }
@@ -136,7 +135,7 @@
 
 /* ---------- 地图 ---------- */
 .tn-map-box { position: relative; }
-#tn-map { display: block; width: 100%; height: 280px; border-radius: 8px; background: var(--bg); touch-action: manipulation; }
+#tn-map { display: block; width: 100%; height: 280px; border-radius: var(--radius-sm); background: var(--bg); touch-action: manipulation; }
 .tn-tip { position: absolute; z-index: 2; pointer-events: none; max-width: 240px; background: var(--panel-2); border: 1px solid var(--line);
   border-radius: 8px; padding: 6px 9px; font-size: 13px; box-shadow: 0 4px 14px rgba(0, 0, 0, .4); }
 .tn-tip b { display: block; }
