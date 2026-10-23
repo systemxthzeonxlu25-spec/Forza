@@ -152,7 +152,8 @@ def test_detector_status_has_no_side_effects():
     ({"forward": ["127.0.0.2:5555"]}, "无限循环"),                    # 整个 127.0.0.0/8 都是回环
     ({"record_buffer_minutes": float("inf")}, "record_buffer_minutes"),   # TOML 允许写 inf
     ({"live_hz": float("nan")}, "live_hz"),
-    ({"game": ["fh6"]}, "game"),                                        # 写成列表：给中文提示，不抛 TypeError
+    ({"game": ["fh6"]}, "game"),
+    ({"forward": ["[2001:db8::1]:20777"]}, "IPv6"),                   # 转发 socket 只支持 IPv4                                        # 写成列表：给中文提示，不抛 TypeError
 ])
 def test_config_validate_rejects(kwargs, words):
     with pytest.raises(ConfigError, match=words):
@@ -374,3 +375,51 @@ def test_info_command_validates_config(tmp_path, capsys):
     with mock.patch.object(cli, "load_config", return_value=Config(tire_temp_unit="K")):
         assert cli.main(["info", str(rec)]) == 2
     assert "tire_temp_unit" in capsys.readouterr().err
+
+
+def test_powertrain_rows_get_backfilled_track(tmp_path):
+    """中途接入的半圈先存了动力总成数据（track_id 为空），后面整圈认出赛道后也要一起补上。"""
+    from forza import powertrain
+
+    def fake_record(store, lap):            # 每圈都写一行动力总成数据（真实数据要有换挡等才会写）
+        powertrain.ensure_schema(store)
+        m = lap.meta
+        store.execute("INSERT INTO powertrain_laps (lap_id, game, car_ordinal, track_id) VALUES (?,?,?,?)",
+                      (m["id"], m["game"], m["car_ordinal"], m.get("track_id")))
+
+    store = Store(tmp_path / "t.db")
+    with mock.patch.object(powertrain, "record_lap", side_effect=fake_record):
+        laps = _run_partial_session(store, CircleStream(track_ordinal=None))
+    rows = store.query("SELECT lap_id, track_id FROM powertrain_laps ORDER BY lap_id")
+    right = laps[1]["track_id"]
+    assert right is not None and len(rows) == len(laps)
+    assert all(r["track_id"] == right for r in rows)
+
+
+def test_match_track_prefers_layout_with_matching_length():
+    """共用起终点线：参考圈长为空的旧布局不能抢在圈长真正对得上的布局前面；不许猜时有多个候选就不选。"""
+    from forza.live import match_track
+    store = Store(":memory:")
+    kw = dict(family="fh", game="fh5", kind="circuit", track_ordinal=None, start_x=0.0, start_z=0.0)
+    old = store.find_or_create_track(length_m=2000, **kw)
+    right = store.find_or_create_track(length_m=3000, **kw)
+    assert old != right
+    store.set_track_length(old, None)                                  # 旧布局的飞驰圈后来都被删掉了
+    q = dict(family="fh", kind="circuit", track_ordinal=None, x=0.0, z=0.0)
+    assert match_track(store, length_m=3010, **q) == right
+    assert match_track(store, length_m=5000, **q) == old                # 都对不上时才退回到空长度的
+    assert match_track(store, length_m=None, guess=False, **q) is None
+    assert match_track(store, length_m=None, guess=True, **q) in (old, right)
+
+
+def test_invalidated_summary_is_announced_and_not_replaced(cfg):
+    """倒带作废了最新那条小结：消息里带上它的 id 让手机删掉，last_summary 清空而不是退回上一条（否则会再弹一次）。"""
+    rt = Runtime(cfg)
+    live = rt.live
+    live.summaries.extend([{"id": 1}, {"id": 2}])
+    live.last_summary = {"id": 2}
+    live._remove_summary(2)
+    msg = live.snapshot()
+    assert msg["last_summary"] is None and msg["invalidated_summary_ids"] == [2]
+    assert [s["id"] for s in live.recent_summaries()] == [1]
+    rt.shutdown()

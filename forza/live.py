@@ -91,6 +91,7 @@ compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十
     },
     "race_time": 300.1, "position": 3
   },
+  "invalidated_summary_ids": [12],  # 最近被倒带作废的小结 id（手机从列表里删掉、正在显示的卡片收起）
   "last_summary": null | {       # 最近一圈存好后的小结（每条消息都带，手机按 id 判断是不是新的）
     "id": 12, "lap_id": 12, "t": 1760000000.0, "lap_number": 2, "kind": "lap", "lap_time": 83.4,
     "is_complete": true, "first_lap": false, "flags": [], "track_name": "...", "setup_name": null,
@@ -173,14 +174,15 @@ def _pos(x) -> float | None:
 
 def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: float | None,
                 z: float | None, length_m: float | None = None, length_tol: float | None = TRACK_LENGTH_TOL,
-                car_ordinal: int | None = None, game: str | None = None) -> int | None:
+                car_ordinal: int | None = None, game: str | None = None, guess: bool = True) -> int | None:
     """按 storage.find_or_create_track 的规则找已有赛道，找不到返回 None（不新建）。
 
     - 有 TrackOrdinal（FM2023）：按 ordinal
     - 否则：起点坐标相距 < TRACK_START_RADIUS_M；赛道赛再按圈长：
         length_tol 不为 None：圈长差 < length_tol（和存档时一样），多个候选取 id 最小的（存档时也是取第一个）
         length_tol 为 None（只知道起步圈的长度，可能偏长）：取圈长最接近的
-        不知道圈长：取这台车在上面跑过最多完整圈的
+        不知道圈长：附近只有一条就是它；有好几条时 guess=True 取这台车在上面跑过最多完整圈的，
+                    guess=False 返回 None（中途接入、还没跑完一圈飞驰圈时用：宁可先不显示 PB，也不拿错的布局比）
       冲刺赛只看起点，多个候选取最近的。
     """
     if track_ordinal:
@@ -204,15 +206,21 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
         return min(cands, key=lambda c: (c[1], c[0]["id"]))[0]["id"]
     if length_m and length_m > 0:
         if length_tol is not None:
+            # 参考圈长对得上的优先；参考圈长为空的（还没飞驰圈，或飞驰圈都被删 / 作废了）只在没有对得上的时候才用，
+            # 否则共用起终点线时，一条空长度的旧布局会抢在真正匹配的布局前面
             ok = [r for r, _ in cands
-                  if not r["ref_length_m"] or abs(r["ref_length_m"] - length_m) / r["ref_length_m"] <= length_tol]
-            return ok[0]["id"] if ok else None
+                  if r["ref_length_m"] and abs(r["ref_length_m"] - length_m) / r["ref_length_m"] <= length_tol]
+            unknown = [r for r, _ in cands if not r["ref_length_m"]]
+            pick = ok or unknown
+            return pick[0]["id"] if pick else None
         with_len = [(r, abs(r["ref_length_m"] - length_m)) for r, _ in cands if r["ref_length_m"]]
         if with_len:
             return min(with_len, key=lambda c: (c[1], c[0]["id"]))[0]["id"]
         return cands[0][0]["id"]
     if len(cands) == 1:
         return cands[0][0]["id"]
+    if not guess:
+        return None
     best_id, best_n = cands[0][0]["id"], -1
     for r, _ in cands:
         sql = "SELECT COUNT(*) AS n FROM laps WHERE track_id=? AND is_complete=1"
@@ -368,6 +376,7 @@ class LiveBroadcaster:
         # 本圈小结
         self.summaries: deque[dict] = deque(maxlen=SUMMARY_KEEP)
         self.last_summary: dict | None = None
+        self.invalidated_summary_ids: deque[int] = deque(maxlen=SUMMARY_KEEP)   # 被倒带作废的小结，告诉已经打开的手机
         # 历史最快（PB）
         self._pb_ver = 0                 # 每存好一圈 +1：PB 可能变了，重新查
         self._pb_cache: dict[tuple, dict] = {}
@@ -450,7 +459,10 @@ class LiveBroadcaster:
     def _remove_summary(self, lap_id: int) -> None:
         self.summaries = deque((s for s in self.summaries if s.get("id") != lap_id),
                                maxlen=self.summaries.maxlen)
-        self.last_summary = self.summaries[-1] if self.summaries else None
+        if self.last_summary is not None and self.last_summary.get("id") == lap_id:
+            # 不退回到上一条：手机会把它当成“新小结”再弹一次卡片。之后连上的手机从 /api/live/summaries 拿列表
+            self.last_summary = None
+        self.invalidated_summary_ids.append(lap_id)
         self.invalidate()
 
     def recent_summaries(self) -> list[dict]:
@@ -473,6 +485,7 @@ class LiveBroadcaster:
                     log.debug("组装圈速信息出错", exc_info=True)
             msg["lap"] = lap
         msg["last_summary"] = self.last_summary
+        msg["invalidated_summary_ids"] = list(self.invalidated_summary_ids)
         msg["status"] = self._status_block()
         return msg
 
@@ -642,7 +655,7 @@ class LiveBroadcaster:
             return None
         q = {"family": ev.family, "game": ev.game, "car_ordinal": ev.car_ordinal,
              "car_pi": int(fr.car_pi or 0), "track_ordinal": None, "x": None, "z": None,
-             "length_m": None, "length_tol": None}
+             "length_m": None, "length_tol": None, "guess": True}
         if fr.track_ordinal:                      # FM2023：一开始就知道是哪条赛道
             q.update(kind="circuit", track_ordinal=int(fr.track_ordinal))
             tkey = ("ord", int(fr.track_ordinal))
@@ -658,11 +671,14 @@ class LiveBroadcaster:
                 length, tol = statistics.median(flying), TRACK_LENGTH_TOL
             elif ev.lap_lengths:
                 length, tol = ev.lap_lengths[0], None
-            elif det.pending is not None:
+            elif det.pending is not None and "partial_start" not in det.pending.flags:
+                # 挂起圈是中途接入的半圈时长度是半截的，不能拿来比
                 length, tol = det.buf_distance(det.pending), None
             else:
                 length, tol = None, None
-            q.update(kind="circuit", x=ev.line_x, z=ev.line_z, length_m=length, length_tol=tol)
+            # 中途接入、还不知道圈长时不许猜布局（见 match_track 的 guess）
+            q.update(kind="circuit", x=ev.line_x, z=ev.line_z, length_m=length, length_tol=tol,
+                     guess=not (length is None and ev.partial_start))
             tkey = ("line", round(ev.line_x, 1), round(ev.line_z, 1),
                     None if length is None else round(length / 10.0), tol)
         else:
@@ -728,11 +744,12 @@ class LiveBroadcaster:
         self._pb_jobs.discard(key)
 
     def _lookup_pb(self, *, family, game, car_ordinal, car_pi, kind, track_ordinal, x, z,
-                   length_m, length_tol) -> dict:
+                   length_m, length_tol, guess=True) -> dict:
         """（后台线程）找赛道 → 找同车最快完整圈 → 解压出距离 / 时间数组。"""
         store = self.rt.store
         track_id = match_track(store, family=family, kind=kind, track_ordinal=track_ordinal, x=x, z=z,
-                               length_m=length_m, length_tol=length_tol, car_ordinal=car_ordinal, game=game)
+                               length_m=length_m, length_tol=length_tol, car_ordinal=car_ordinal, game=game,
+                               guess=guess)
         if track_id is None:
             return {"state": "none", "reason": "这条赛道还没有存过圈"}
         rows = store.query(

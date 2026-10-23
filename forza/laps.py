@@ -120,6 +120,7 @@ class _Event:
     line_x: float | None = None        # 第一次过起终点线的位置（赛道指纹用）
     line_z: float | None = None
     saw_position: bool = False         # 有没有出现过名次 > 0
+    partial_start: bool = False        # 这场是中途接入的（开始记录时第一圈已经跑了一段）
     boundaries: int = 0                # 过线次数
     lap_lengths: list[float] = field(default_factory=list)      # 本场所有完整圈的距离（含站立起步的第一圈）
     flying_lengths: list[float] = field(default_factory=list)   # 只含飞驰圈（不是第一圈）：实时面板按它匹配赛道布局
@@ -239,6 +240,7 @@ class LapDetector:
         # 缺前段数据，过线时只能存成不完整圈，也不能拿它的长度去认赛道
         if fr.current_lap > PARTIAL_START_S or (fr.current_lap <= 0 and fr.race_time > PARTIAL_START_S):
             self.cur.flags.add("partial_start")
+            self.event.partial_start = True
         self.pending = None
         self._pending_end = None
 
@@ -594,6 +596,12 @@ class LapSaver:
         st = self.store
         st.execute("UPDATE sessions SET track_id=? WHERE id=? AND track_id IS NULL", (track_id, session_id))
         st.execute("UPDATE laps SET track_id=? WHERE session_id=? AND track_id IS NULL", (track_id, session_id))
+        # 动力总成数据（forza/powertrain.py）存了一份圈的 track_id，算改终传预测时按它筛选，也要跟着补
+        try:
+            st.execute("UPDATE powertrain_laps SET track_id=? WHERE track_id IS NULL AND lap_id IN "
+                       "(SELECT id FROM laps WHERE session_id=?)", (track_id, session_id))
+        except Exception:     # 表还没建（这台车还没存过动力总成数据）：没什么要补的
+            pass
 
     def _after_save(self, lap: LapData) -> None:
         """存好之后的附加处理和监听：每个单独 try，出错只记日志，不算“存档失败”，也不影响别的监听。"""

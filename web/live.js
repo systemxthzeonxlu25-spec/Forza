@@ -206,6 +206,7 @@
     let msg;
     try { msg = JSON.parse(text); } catch (_) { return; }
     if (msg.status) status = msg.status;
+    if (Array.isArray(msg.invalidated_summary_ids)) dropSummaries(msg.invalidated_summary_ids);
     if (msg.last_summary) onSummary(msg.last_summary, msg.t);
     if (msg.type === "frame" && msg.frame) {
       latest = msg;
@@ -908,6 +909,15 @@
     if (i >= 0) summaries[i] = s; else summaries.push(s);
     summaries.sort((a, b) => b.id - a.id);
     summaries.length = Math.min(summaries.length, SUMMARY_KEEP);
+  }
+  // 服务端说这些小结作废了（那圈被倒带跨回去、成绩不算了）：从列表里删掉，正在显示的卡片收起
+  function dropSummaries(ids) {
+    if (!ids.length) return;
+    const gone = new Set(ids);
+    const before = summaries.length;
+    for (let i = summaries.length - 1; i >= 0; i--) if (gone.has(summaries[i].id)) summaries.splice(i, 1);
+    if (cardId !== null && gone.has(cardId)) hideCard();
+    if (summaries.length !== before && !E.menu.hidden) renderSummaryList();
   }
   function onSummary(s, serverT) {
     if (!s || s.id === lastSummaryId) return;

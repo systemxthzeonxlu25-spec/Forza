@@ -38,6 +38,13 @@ def _is_self_host(host: str, self_hosts: set[str]) -> bool:
     return ip.is_loopback or ip.is_unspecified
 
 
+def _is_ipv6(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host.strip().strip("[]")).version == 6
+    except ValueError:
+        return False
+
+
 class ConfigError(ValueError):
     """配置写得不对。message 是给用户看的中文提示（指出是哪一项、该怎么改）。"""
 
@@ -114,6 +121,9 @@ class Config:
             if int(port_s) == self.udp_port and _is_self_host(host, self_hosts):
                 raise ConfigError(f"forward 里的 {item!r} 指向本程序自己的 UDP 端口 {self.udp_port}："
                                   "转发出去的包会被自己再收到，无限循环。换成别的程序的端口")
+            if _is_ipv6(host):
+                # Hub 的转发 socket 是 IPv4 的，发 IPv6 地址每次都会失败（还被静默吞掉），看起来配好了其实什么都没发
+                raise ConfigError(f"forward 里的 {item!r} 是 IPv6 地址，转发暂时只支持 IPv4（例如 127.0.0.1:20777）")
 
     def resolve(self, p: str) -> Path:
         path = Path(p)
