@@ -1,5 +1,4 @@
 """切圈逻辑：正常圈、暂停、倒带（圈内 / 跨线）、重开、最后一圈、冲刺赛、自由漫游、换车。"""
-import math
 
 import numpy as np
 import pytest
@@ -164,7 +163,9 @@ def test_sprint_finish_and_abandon(tmp_path):
     det.flush()
     laps = sorted(store.list_laps(), key=lambda l: l["id"])
     assert [l["kind"] for l in laps] == ["sprint"] * 3
+    # 跑完后直接点重来，时钟复位和中途重开一样；不能因此把跑完的成绩作废
     assert [l["is_complete"] for l in laps] == [True, False, True]
+    assert "interrupted" not in laps[0]["flags"]
     assert "abandoned" in laps[1]["flags"]
     assert len({l["track_id"] for l in laps}) == 1, "同一起点应识别为同一条路线"
     assert laps[0]["lap_time"] == pytest.approx(route / s.v, abs=0.1)

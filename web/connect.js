@@ -4,7 +4,7 @@
 
   Forza.nav("connect");
   const $ = (id) => document.getElementById(id);
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const esc = Forza.esc;      // 公用的 HTML 转义（见 common.js）
 
   // 用 vendor/qrcode.js（qrcode-generator）生成 SVG 二维码；类型号 0 = 按内容长度自动选
   function qrSvg(text) {

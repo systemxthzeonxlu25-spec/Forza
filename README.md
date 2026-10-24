@@ -18,6 +18,8 @@
 | `/car.html`（车辆调校） | 调校版本记录与对比、实测功率曲线、各挡传动比与最佳换挡点、改终传预测 |
 | `/connect.html`（连接手机） | 手机访问地址的二维码、游戏里该填什么 |
 
+界面配色参考 Claude 的设计风格（暖象牙底、衬线标题、陶土橙强调色）。除实时面板外，各页面右上角可以切换主题：跟随系统 → 浅色 → 深色，选择记在本机浏览器里。实时面板固定用深色，开车时看着不刺眼。
+
 
 ---
 
@@ -152,9 +154,9 @@ python -m forza fake --format fh --scenario sprint   # Horizon 冲刺赛假数�
 | 323 / 324 | **Forza Horizon 4 / 5 / 6** | Sled + 12 字节 Horizon 专有字段 + Dash（+1 字节尾巴） |
 | 331 | **Forza Motorsport (2023)** Car Dash | Sled + Dash + 四轮磨损 + 赛道 ID |
 
-- 324 字节的包分不出是 FH4、FH5 还是 FH6，三代布局完全一样。想在记录里标清楚的话，启动时加 `--game fh6`（或 fh4 / fh5）。
+- 324 字节的包分不出是 FH4、FH5 还是 FH6。它们共用 Dash 偏移，但不能据此认定所有字段类型都一样：FH6 官方把积水定义为 S32 标志、CarGroup 定义为 U32。请明确传 `--game fh6`，程序才应用这些类型；FH4/5 保留现有解释，仍需真实采样核对。
 - FH3 及更早、FM6 及更早**没有 Data Out**，用不了这个工具。
-- **没见过的包长**（比如以后游戏加了字段）：程序会用"Speed 字段 ≈ 速度向量长度"去试 FM 和 FH 两种布局，自动选对得上的那个，并在页面上提示。已知包长也会持续做这个校验，万一游戏改了布局能及时发现。
+- **没见过的包长**：用"Speed 字段 ≈ 速度向量长度"探测两个 Dash 偏移。至少 20 次通过且领先另一候选 5 票后才启用 Dash；此前仅输出公共 Sled 字段。这个校验不能证明新增字段的含义，所以未知长度的 FM 包不读取磨损和赛道 ID，也不自动认定为 FM2023。已知长度仍持续校验布局。
 - 胎温：官方文档原文没能确认单位，社区共识是华氏度，程序默认按 °F 转成 °C。如果发现明显不对，可以用 `--tire-unit C` 或 `config.toml` 改。
 - 格式依据：官方 [FM Data Out 文档](https://support.forza.net/hc/en-us/articles/21742934024211-Forza-Motorsport-Data-Out-Documentation)、[FH6 Data Out 文档](https://support.forza.net/hc/en-us/articles/51744149102611-Forza-Horizon-6-Data-Out-Documentation)，以及 [geeooff/forza-data-web](https://github.com/geeooff/forza-data-web)、[richstokes/Forza-data-tools](https://github.com/richstokes/Forza-data-tools)、[TheBanHammer/fh6-tel](https://github.com/TheBanHammer/fh6-tel) 等开源实现交叉核对。
 
@@ -162,16 +164,19 @@ python -m forza fake --format fh --scenario sprint   # Horizon 冲刺赛假数�
 
 全部基于游戏自己给的字段：
 
-- `IsRaceOn = 0`（菜单、暂停）：跳过这些帧，不打断当前这一圈。
-- `LapNumber` + 1：上一圈结束。圈时直接取游戏给的 `LastLap`。
-- 比赛时间小幅回退 = **倒带**：删掉被倒掉的那段数据，接着记。倒过了起终点线，就把上一圈拿回来接着记。
-- 比赛时间回到 0 = **重开**：没跑完的那一圈丢弃。
+- `IsRaceOn = 0`（菜单、暂停）：跳过这些帧，不打断当前这一圈。暂停多久都行，只要游戏还在发包（FM 暂停时会发）；连续暂停超过 3 分钟、或者完全收不到包超过 30 秒（游戏关了，FH6 进菜单会停发）才结束这场比赛。刚过线就暂停时，上一圈等 12 秒就落盘。
+- `LapNumber` + 1：上一圈结束。圈时直接取游戏给的 `LastLap`。中途开始采集（首帧圈时超过 1 秒）的首圈标为不完整，不参与最快圈或实时差距参考，也不拿它的半截长度去识别赛道（中途接入的冲刺赛不归到任何路线）。
+- 比赛时间小幅回退 = **倒带**：删掉被倒掉的采样并重算最高车速。跨线时可恢复尚未落盘的圈；跨回已经落盘的圈时，旧记录保留但标为“倒带失效”，退出最快圈选择。更早的完整轨迹不自动恢复。
+- 比赛时间接近 0 = **重开**：未完成的赛道圈丢弃，不能因距离达到 95% 而升级为完整圈。FH 冲刺赛跑完马上点重来和中途重开在时钟上看不出区别，所以重开前的冲刺记录标“完赛推定”，是否算跑完由路线长度（≥已知最长距离的 95%）决定。倒带到接近零和重开的区分仍是启发式。
 - **FH 冲刺赛**（全程 LapNumber = 0 且有名次）：整段存成一条"冲刺"记录。是否跑完的判断方法是：和这条路线跑过的最长距离比，达到 95% 以上算跑完。第一次跑某条路线时没有参照，只能先当作跑完；以后跑了更长的距离，会自动把之前那条改标成"放弃"。
 - **FH 自由漫游**（没有比赛时钟）：只能看实时面板，不切圈。
 - 比赛最后一圈冲线时游戏如果没让 LapNumber + 1，就按距离判断：达到本场整圈的 95% 算完整圈，圈时自己量。
+- 冲刺赛和未收到过线信号的末圈会显示“完赛推定”：`is_complete` 在这些情况下只是距离启发式结果，不是游戏正式确认。首次半途退出及同起点不同路线仍需实机核对。
 - 赛道识别：FM2023 用赛道 ID；其他游戏的包里没有赛道 ID，用"起终点位置 + 圈长"识别。名字可以在网页上改。
 
 ## 7. 圈速对比怎么看
+
+数据正确性检查、独立字节样本测试及最短 FH5 实机采样流程见 [2026-10-23 技术验收](docs/data-correctness-2026-10-23.md)。
 
 打开 `/laps.html`，先选赛道和车。列表里每圈前面有 **A / B** 两个选择钮：A 是参考圈，B 是要分析的圈。默认是"最新一圈 对比 最快圈"。
 
@@ -305,7 +310,8 @@ forza/
   live.py         实时推送（WebSocket）、本圈小结、PB 参照
   analysis.py     两圈对比（解释句阈值在文件顶部）
   sectors.py      固定弯道 / 分段表、理论最佳圈、逐段稳定性
-  tuning.py       调车诊断（阈值在 tuning_rules.toml）
+  tuning/         调车诊断包：每项检查一个 check_*.py，主流程在 diagnosis.py（阈值在 tuning_rules.toml）
+  util.py         各模块共用的小工具（时间戳、圈标记 flags 解析、数值取舍）
   setups.py       调校版本               powertrain.py 功率曲线 / 传动比 / 换挡点
   api/            各模块的 HTTP 路由         fake/       假数据生成器
 web/              前端（原生 JS，无需构建；uPlot 等依赖已放在 web/vendor）
@@ -316,7 +322,7 @@ tests/            pytest，全部基于假数据 / 手搓帧，不需要游戏
 
 - **游戏出了新包格式**：在 `forza/packet.py` 里照着现有字段表加一个 `PacketFormat`，再在 `profiles.py` 里加游戏配置。
 - **切圈要多记一个通道**：在 `lapdata.py` 的 `CHANNELS` 和 `frame_sample()` 各加一项。
-- **加一条诊断规则**：在 `tuning.py` 里照着现有检查写一个函数，阈值放进 `tuning_rules.toml`。
+- **加一条诊断规则**：在 `forza/tuning/` 里照着现有的 `check_*.py` 新建一个文件写检查函数，加进 `diagnosis.py` 的 `CHECKS`，阈值放进 `tuning_rules.toml`（步骤见 `forza/tuning/__init__.py` 的说明）。
 - **改解释句的阈值**（比如滑行多久才提）：在 `analysis.py` 顶部的常量里改。
 - **假数据加花样**：`python -m forza fake --grid-offset 200` 可以从线后 200 m 的发车格起步，用来测第一圈比飞驰圈长的情况。
 - **拿真实数据校准**：用 `python -m forza serve --record` 跑几圈，录像放进 `samples/`。之后 `python -m forza info` 看切圈结果，`python -m forza import` 导入后在网页上看对比和诊断。

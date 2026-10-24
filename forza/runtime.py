@@ -25,6 +25,7 @@ from .recorder import Recorder
 from .replay import replay_to_hub
 from .storage import Store
 from .udp import start_udp
+from .util import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -67,12 +68,14 @@ class Runtime:
         self.detector = LapDetector()
         self.saver = LapSaver(self.store, source)
         self.detector.add_listener(self._on_lap)
+        self.detector.add_invalidation_listener(self.saver.invalidate)
         self.hub.subscribe(self.detector.on_frame)
 
         # 实时推送（手机面板）；新圈存好后算本圈小结
         self.live = LiveBroadcaster(self)
         self.hub.subscribe(self.live.on_frame)
         self.saver.add_listener(self.live.on_lap_saved)
+        self.saver.add_invalidation_listener(self.live.on_lap_invalidated)
 
     def _on_lap(self, lap: LapData) -> None:
         for fn in list(PRE_SAVE_HOOKS):
@@ -150,7 +153,7 @@ class Runtime:
                 "minutes": round(minutes, 2)}
         count = await asyncio.to_thread(write_packed, path, packed, meta)   # 写文件放后台线程
         self.last_snapshot = {"path": str(path), "packets": count, "seconds": secs,
-                              "created_at": datetime.now().isoformat(timespec="seconds")}
+                              "created_at": now_iso()}
         log.info("已保存最近 %.1f 分钟原始包：%s（%d 个包，%.0f s）", minutes, path, count, secs)
         return {"path": str(path), "packets": count, "seconds": secs}
 
@@ -170,6 +173,7 @@ class Runtime:
                                   "没有开环形缓冲（record_buffer_minutes = 0）" if self.hub.ring is None else None),
             "rec_dir": str(self._rec_dir()),
             "last_snapshot": self.last_snapshot,
+            "error": self.hub.record_error,          # 录制中途写失败时的原因（否则 None）
         }
 
     def status(self) -> dict:
@@ -178,11 +182,14 @@ class Runtime:
             "laps": self.detector.status(),
             "udp_port": self.cfg.udp_port,
             "http_port": self.cfg.http_port,
-            "lan_ips": lan_ips(),
+            # 用实时推送模块里后台刷新的缓存：这个方法在事件循环里跑（/api/status 是 async 路由），
+            # 直接调 lan_ips() 的话缓存过期那一下会同步做 DNS 查询，卡住收包
+            "lan_ips": self.live.lan_ips_cached(),
             "replay": self.replay_path,
             # 已经写进数据库的圈数 / 最新一圈 id：网页轮询发现变化就自动刷新圈列表
             "saved_count": len(self.saver.saved_ids),
             "last_saved_lap_id": self.saver.saved_ids[-1] if self.saver.saved_ids else None,
+            "laps_revision": self.saver.revision,    # 存新圈 / 作废已存圈都会变：网页看它决定要不要刷新
         }
 
     async def _tick(self) -> None:

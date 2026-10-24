@@ -1,7 +1,9 @@
 """自动切圈：把帧流切成一圈一圈（或一次次冲刺赛），存进 SQLite。
 
 切圈规则全部基于游戏自己给的字段：
-- IsRaceOn = 0：菜单 / 暂停，跳过这些帧（不结束当前比赛，恢复后接着记）
+- IsRaceOn = 0：菜单 / 暂停，跳过这些帧（不结束当前比赛，恢复后接着记）。
+  暂停期间游戏还在发包（FM 会发 IsRaceOn = 0 的包），只要还收得到同一台车的包就不算“空闲”；
+  连续暂停超过 PAUSE_MAX_S 才结束这场比赛（多半是退出到菜单了）
 - CurrentRaceTime <= 0：没有比赛时钟（FH 自由漫游），结束当前比赛
 - LapNumber + 1：上一圈结束。圈时取游戏的 LastLap，不自己算
 - CurrentRaceTime 小幅回退：倒带。删掉“被倒掉”的那段采样，接着记；倒过了起终点线就把上一圈拿回来
@@ -21,13 +23,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Callable
 
 import numpy as np
 
 from .frame import Frame
 from .lapdata import LapData, frame_sample
+from .util import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +42,31 @@ FINAL_LAP_RATIO = 0.95         # 最后一圈距离达到整圈的这个比例�
 SPRINT_FINISH_RATIO = 0.95     # 冲刺赛距离达到路线长度的这个比例才算跑完
 DIST_MISMATCH = 0.2            # DistanceTraveled 和速度积分差超过 20% 就改用积分距离
 MIN_SPRINT_M = 300.0           # 短于这个距离的“冲刺赛”直接丢弃（多半是赛道赛第一圈就重开了）
+IDLE_S = 30.0                  # 完全收不到包这么久（游戏关了 / FH6 进菜单停发）就结束当前比赛
+PAUSE_MAX_S = 180.0            # 还在收包、但连续暂停（IsRaceOn = 0）这么久，也结束当前比赛
+PARTIAL_START_S = 1.0          # 开始记录时这圈已经跑了超过这么久 = 中途接入（缺前段数据）
 UNTAGGED_SOURCES = ("import:", "replay:")   # 这些来源（导入 / 回放录像）的圈默认不归调校版本，见 LapSaver
+
+
+def should_use_integrated_distance(d_field, d_int) -> bool:
+    """这一圈的距离通道该不该改用“车速积分距离”。
+
+    游戏给的 DistanceTraveled 一般可靠，但有两种情况不能用：
+    1. 不单调（倒带、某些模式下会跳回去）；
+    2. 和车速积分出来的距离差太多（超过 DIST_MISMATCH，比如跨场次累计、被重置过）。
+    积分距离太短（< 50 m）时比例不可靠，不判。
+
+    切圈器存圈（LapDetector._emit）和实时面板算差距（live.LiveBroadcaster._reference）都用这一个函数，
+    保证同一圈在两边用的是同一种距离口径。
+    """
+    d_field = np.asarray(d_field, dtype=np.float64)
+    d_int = np.asarray(d_int, dtype=np.float64)
+    total_int = float(d_int[-1]) if len(d_int) else 0.0
+    if total_int <= 50:
+        return False
+    total_field = float(d_field[-1]) if len(d_field) else 0.0
+    monotonic = bool(np.all(np.diff(d_field) >= -0.5)) if len(d_field) > 1 else True
+    return not monotonic or abs(total_field - total_int) / total_int > DIST_MISMATCH
 
 
 @dataclass
@@ -63,7 +89,9 @@ class _LapBuf:
     def lap_t(self, fr: Frame) -> float:
         if not self.use_rt_clock and fr.current_lap <= 0 and fr.race_time - self.start_rt > 1.0:
             self.use_rt_clock = True
-        return fr.race_time - self.start_rt if self.use_rt_clock else fr.current_lap
+        # 头一秒还判断不出游戏给不给 CurrentLap（点到点赛事常常一直是 0），
+        # 这期间先用比赛时间顶上，免得这一秒的采样时间全是 0
+        return fr.race_time - self.start_rt if self.use_rt_clock or fr.current_lap <= 0 else fr.current_lap
 
     def truncate(self, t: float) -> None:
         """倒带：删掉圈内时间 > t 的采样。"""
@@ -75,6 +103,7 @@ class _LapBuf:
         self.int_dist = self.idist[-1] if self.idist else 0.0
         self.last_row_t = self.rows[-1][0] if self.rows else -1.0
         self.last_t = max(self.last_row_t, 0.0)
+        self.max_speed = max((row[2] for row in self.rows), default=0.0)
         self.flags.add("rewind")
 
 
@@ -91,10 +120,14 @@ class _Event:
     line_x: float | None = None        # 第一次过起终点线的位置（赛道指纹用）
     line_z: float | None = None
     saw_position: bool = False         # 有没有出现过名次 > 0
+    partial_start: bool = False        # 这场是中途接入的（开始记录时第一圈已经跑了一段）
     boundaries: int = 0                # 过线次数
-    lap_lengths: list[float] = field(default_factory=list)
+    lap_lengths: list[float] = field(default_factory=list)      # 本场所有完整圈的距离（含站立起步的第一圈）
+    flying_lengths: list[float] = field(default_factory=list)   # 只含飞驰圈（不是第一圈）：实时面板按它匹配赛道布局
     best_time: float | None = None
     best_lap: LapData | None = None
+    # 本场已经交出去的圈的 meta（只存元数据，不多占采样内存）：倒带跨回已落盘的圈时，用它把那些圈作废
+    emitted_meta: list[dict] = field(default_factory=list)
 
 
 class LapDetector:
@@ -102,6 +135,7 @@ class LapDetector:
 
     def __init__(self, on_lap: Callable[[LapData], None] | None = None):
         self._listeners: list[Callable[[LapData], None]] = [on_lap] if on_lap else []
+        self._invalidation_listeners: list[Callable[[dict], None]] = []
         self.event: _Event | None = None
         self.cur: _LapBuf | None = None
         self.pending: _LapBuf | None = None
@@ -109,6 +143,7 @@ class LapDetector:
         self._last_frame: Frame | None = None
         self._last_rt = 0.0
         self._last_race_wall = 0.0                # 最近一次比赛帧的 monotonic 时刻
+        self._last_paused_wall = 0.0              # 最近一次“同一台车的暂停帧”（IsRaceOn = 0）的 monotonic 时刻
         self._last_race_epoch = 0.0               # 同一时刻的 time.time()（写进 meta["ended_epoch"]）
         self._pending_end_epoch: float | None = None   # 挂起圈过线时的 time.time()
         self._event_seq = 0
@@ -118,11 +153,16 @@ class LapDetector:
     def add_listener(self, fn: Callable[[LapData], None]) -> None:
         self._listeners.append(fn)
 
+    def add_invalidation_listener(self, fn: Callable[[dict], None]) -> None:
+        self._invalidation_listeners.append(fn)
+
     # ------------------------------------------------------------------
     def on_frame(self, fr: Frame) -> None:
         if not fr.has_dash:          # Sled 格式没有圈数信息
             return
-        if not fr.is_race_on:        # 菜单 / 暂停
+        if not fr.is_race_on:        # 菜单 / 暂停：不切圈，但记下“还在收包”，暂停再久也不当成游戏关了
+            if self.event and fr.car_ordinal == self.event.car_ordinal:
+                self._last_paused_wall = time.monotonic()
             return
         self._last_race_wall = time.monotonic()
         self._last_race_epoch = time.time()
@@ -165,10 +205,25 @@ class LapDetector:
         if self.pending and self.cur.lap_t(fr) > PENDING_WINDOW_S:
             self._commit_pending()
 
-    def tick(self, idle_s: float = 30.0) -> None:
-        """定期调用（例如每秒）：太久没有比赛帧（退出到菜单、游戏关了）就把手上的圈收尾。"""
-        if self.event and time.monotonic() - self._last_race_wall > idle_s:
+    def tick(self, idle_s: float = IDLE_S, pause_max_s: float = PAUSE_MAX_S) -> None:
+        """定期调用（例如每秒），处理“没有比赛帧”的几种情况：
+
+        1. 刚过线就暂停 / 进菜单：挂起的圈等不到新一圈跑满 PENDING_WINDOW_S，
+           那就按墙钟等 PENDING_WINDOW_S 后直接落盘（暂停中不会倒带）。
+        2. 完全收不到包超过 idle_s（游戏关了，或 FH6 进菜单停发）：结束当前比赛。
+        3. 还在收暂停帧，但连续暂停超过 pause_max_s：多半是退出比赛了，也结束。
+        """
+        if not self.event:
+            return
+        now = time.monotonic()
+        since_race = now - self._last_race_wall
+        if self.pending and since_race > PENDING_WINDOW_S:
+            self._commit_pending()
+        since_any = now - max(self._last_race_wall, self._last_paused_wall)
+        if since_any > idle_s:
             self._end_event("idle")
+        elif since_race > pause_max_s:
+            self._end_event("paused_too_long")
 
     def flush(self) -> None:
         """程序退出 / 导入结束时调用：收尾当前比赛。"""
@@ -181,6 +236,11 @@ class LapDetector:
         self.event = _Event(self._event_seq, fr.family, fr.game, fr.fmt, fr.car_ordinal, fr.pos_x, fr.pos_z)
         self.cur = self._new_buf(fr, fr.lap_number)
         self.cur.flags.add("first_lap")
+        # 开始记录时这圈已经跑了一段（比赛中途才开本工具、换车 / 圈数乱跳后重新记）：
+        # 缺前段数据，过线时只能存成不完整圈，也不能拿它的长度去认赛道
+        if fr.current_lap > PARTIAL_START_S or (fr.current_lap <= 0 and fr.race_time > PARTIAL_START_S):
+            self.cur.flags.add("partial_start")
+            self.event.partial_start = True
         self.pending = None
         self._pending_end = None
 
@@ -217,6 +277,31 @@ class LapDetector:
         self.cur = self._new_buf(fr, fr.lap_number)
 
     def _rewind(self, fr: Frame) -> None:
+        """倒带：游戏的比赛时间往回退了。"""
+        # 倒带可能退得比挂起窗口（PENDING_WINDOW_S）还远，退回到已经落盘的圈里：
+        # 那几圈的数据保留（方便回看），但成绩作废（标不完整 + rewound_after_save），并通知存档方改库
+        ev = self.event
+        for meta in ev.emitted_meta:
+            if meta["lap_number"] >= fr.lap_number and "rewound_after_save" not in meta["flags"]:
+                meta["is_complete"] = False
+                # 换一个新列表而不是原地 append：存档线程可能正在序列化这份 meta
+                meta["flags"] = [*meta["flags"], "rewound_after_save"]
+                for fn in self._invalidation_listeners:
+                    try:
+                        fn(meta)
+                    except Exception:
+                        log.exception("使倒带前的圈失效时出错")
+        # 本场最快圈被作废了就不能再当实时差距的参照；整圈长度表也按剩下的有效圈重算
+        if ev.best_lap is not None and not ev.best_lap.meta["is_complete"]:
+            ev.best_lap, ev.best_time = None, None
+        valid = [m for m in ev.emitted_meta if m["is_complete"] and m["kind"] == "lap"]
+        ev.lap_lengths = [m["distance_m"] for m in valid]
+        ev.flying_lengths = [m["distance_m"] for m in valid if "first_lap" not in m["flags"]]
+        # 退到挂起圈之前（连挂起的那圈都被倒掉了）：挂起圈直接扔掉
+        if self.pending and fr.lap_number < self.pending.lap_number:
+            self.pending = None
+            self._pending_end = None
+            self._pending_end_epoch = None
         if self.pending and fr.lap_number == self.pending.lap_number and fr.lap_number == self.cur.lap_number - 1:
             # 倒过了起终点线：扔掉新开的这圈，把上一圈拿回来接着记
             self.cur = self.pending
@@ -245,23 +330,32 @@ class LapDetector:
         if lap_time is None:
             lap_time = buf.last_t
             source = "measured"
-        self._emit(buf, kind="lap", lap_time=lap_time, time_source=source, complete=True, ended_epoch=end_epoch)
+        self._emit(buf, kind="lap", lap_time=lap_time, time_source=source,
+                   complete="partial_start" not in buf.flags, ended_epoch=end_epoch)
 
     def _end_event(self, reason: str) -> None:
         ev, cur = self.event, self.cur
         if self.pending:
             self._commit_pending()
+        interrupted = reason in {"restart", "car_or_format_changed", "lap_jump"}
         if ev and cur and cur.rows:
-            dist = self._buf_distance(cur)
+            dist = self.buf_distance(cur)
             if (ev.boundaries == 0 and ev.family == "fh" and ev.saw_position and cur.lap_number == 0
                     and dist >= MIN_SPRINT_M):
                 # FH 冲刺赛：整段存成一条记录，是否跑完由保存方按路线长度判断
+                # 跑完冲刺赛马上点“重来”，和中途重开在时钟上看不出区别：这里不能因为 restart 就判成中断，
+                # 否则“跑完 → 重试”这种最常见的练习流程里，前面每次跑完的成绩都会作废。
+                # 是否跑完交给保存方按路线长度判断（短于已知最长距离的 95% 会标“放弃”）。
+                cur.flags.add("finish_inferred")
                 self._emit(cur, kind="sprint", lap_time=cur.last_t, time_source="measured",
-                           complete=True, reason=reason, ended_epoch=self._last_race_epoch or None)
-            elif ev.lap_lengths and dist >= FINAL_LAP_RATIO * statistics.median(ev.lap_lengths):
+                           complete="partial_start" not in cur.flags, reason=reason,
+                           ended_epoch=self._last_race_epoch or None)
+            elif not interrupted and ev.lap_lengths and dist >= FINAL_LAP_RATIO * statistics.median(ev.lap_lengths):
                 # 最后一圈游戏没给 LapNumber + 1，但距离够了，算完整圈（圈时自己量）
+                cur.flags.add("finish_inferred")
                 self._emit(cur, kind="lap", lap_time=cur.last_t, time_source="measured",
-                           complete=True, reason=reason, ended_epoch=self._last_race_epoch or None)
+                           complete="partial_start" not in cur.flags, reason=reason,
+                           ended_epoch=self._last_race_epoch or None)
             else:
                 self.dropped_partial += 1
                 log.info("丢弃未跑完的圈：第 %d 圈，%.0f m（%s）", cur.lap_number, dist, reason)
@@ -270,7 +364,8 @@ class LapDetector:
         self._last_rt = 0.0
 
     @staticmethod
-    def _buf_distance(buf: _LapBuf) -> float:
+    def buf_distance(buf: _LapBuf) -> float:
+        """一圈缓冲目前跑了多远：游戏给的距离和速度积分距离取大的那个（两者有一个不可靠时更稳）。"""
         if not buf.rows:
             return 0.0
         return max(buf.rows[-1][1], buf.idist[-1])
@@ -282,19 +377,16 @@ class LapDetector:
         ev = self.event
         meta_fr = self._last_frame
         lap = LapData.from_rows({}, buf.rows)
-        # 距离通道：DistanceTraveled 和速度积分对不上（或不单调）时，改用速度积分
-        d_field = lap.ch["dist"]
-        d_int = np.asarray(buf.idist, dtype=np.float64)
-        total_int = float(d_int[-1]) if len(d_int) else 0.0
-        total_field = float(d_field[-1]) if len(d_field) else 0.0
-        monotonic = bool(np.all(np.diff(d_field) >= -0.5)) if len(d_field) > 1 else True
-        if total_int > 50 and (not monotonic or abs(total_field - total_int) / total_int > DIST_MISMATCH):
-            lap.ch["dist"] = d_int
+        # 距离通道：游戏给的距离不可靠时改用车速积分（规则见 should_use_integrated_distance）
+        if should_use_integrated_distance(lap.ch["dist"], buf.idist):
+            lap.ch["dist"] = np.asarray(buf.idist, dtype=np.float64)
             buf.flags.add("dist_integrated")
         distance = float(lap.ch["dist"][-1]) if len(lap) else 0.0
 
         if kind == "lap" and complete:
             ev.lap_lengths.append(distance)
+            if "first_lap" not in buf.flags:
+                ev.flying_lengths.append(distance)
         line_x = ev.line_x if ev.line_x is not None else buf.start_x
         line_z = ev.line_z if ev.line_z is not None else buf.start_z
         if kind == "sprint":
@@ -321,12 +413,13 @@ class LapDetector:
             "start_x": line_x, "start_z": line_z,
             "end_reason": reason,
             "ended_epoch": round(ended_epoch if ended_epoch else time.time(), 3),
-            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "created_at": now_iso(),
         }
         if complete and kind == "lap" and (ev.best_time is None or lap_time < ev.best_time):
             ev.best_time = lap_time
             ev.best_lap = lap
         self.laps_emitted += 1
+        ev.emitted_meta.append(lap.meta)
         for fn in self._listeners:
             try:
                 fn(lap)
@@ -334,15 +427,28 @@ class LapDetector:
                 log.exception("处理新圈出错")
 
     # ------------------------------------------------------------------
+    def event_kind(self) -> str | None:
+        """当前这场比赛是什么类型（给实时面板 / 状态接口看）：
+
+        None = 不在比赛里；"circuit" = 已经过过线的赛道赛；
+        "sprint?" = FH 有名次、还没过过线（多半是冲刺赛，跑完才能确定）；"lap" = 其余（第一圈还没跑完）。
+        """
+        ev = self.event
+        if ev is None:
+            return None
+        if ev.boundaries:
+            return "circuit"
+        return "sprint?" if ev.family == "fh" and ev.saw_position else "lap"
+
     def status(self) -> dict:
+        """切圈器状态快照（只读，不改任何内部状态）。"""
         ev, cur, fr = self.event, self.cur, self._last_frame
         return {
             "in_event": ev is not None,
-            "event_kind": None if ev is None else ("circuit" if ev.boundaries else
-                                                   ("sprint?" if ev.family == "fh" and ev.saw_position else "lap")),
+            "event_kind": self.event_kind(),
             "lap_number": cur.lap_number if cur else None,
-            "lap_time": round(cur.lap_t(fr), 3) if cur and fr and cur.rows else None,
-            "lap_distance": round(self._buf_distance(cur), 1) if cur else None,
+            "lap_time": round(cur.last_t, 3) if cur and cur.rows else None,
+            "lap_distance": round(self.buf_distance(cur), 1) if cur else None,
             "last_lap": fr.last_lap if fr else None,
             "best_lap": fr.best_lap if fr else None,
             "event_best": ev.best_time if ev else None,
@@ -373,11 +479,37 @@ class LapSaver:
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lap-saver") if background else None
         self._lock = threading.Lock()
         self.saved_ids: list[int] = []
+        # 圈数据版本号：存了新圈、或者已存的圈被作废（倒带跨回来）都 +1。
+        # 网页轮询 /api/status 发现它变了就刷新列表——只看 saved_count 的话，作废不会让页面刷新
+        self.revision = 0
         self._listeners: list[Callable[[LapData], None]] = []
+        self._invalidation_listeners: list[Callable[[dict], None]] = []
 
     def add_listener(self, fn: Callable[[LapData], None]) -> None:
         """存好之后通知（meta 里已经有 id / track_id / session_id）。"""
         self._listeners.append(fn)
+
+    def add_invalidation_listener(self, fn: Callable[[dict], None]) -> None:
+        self._invalidation_listeners.append(fn)
+
+    def invalidate(self, meta: dict) -> None:
+        # 和 _save 走同一个单线程队列：就算这圈还在排队没写库，作废操作也一定排在写库之后，
+        # 不会和 INSERT 抢跑（抢跑的话 meta 里还没有 id，改不到那一行）
+        if self._pool:
+            self._pool.submit(self._invalidate, meta)
+        else:
+            self._invalidate(meta)
+
+    def _invalidate(self, meta: dict) -> None:
+        if meta.get("id") is None:
+            return
+        self.store.update_lap(meta["id"], is_complete=False, flags=meta["flags"])
+        self.revision += 1
+        # 作废的圈可能正是定赛道参考圈长的飞驰圈之一：和删圈 / 标为不完整一样，重算一遍
+        if meta.get("kind") == "lap" and meta.get("track_id") is not None:
+            self.store.refresh_circuit_length(meta["track_id"], clear_if_empty=True)
+        for fn in self._invalidation_listeners:
+            fn(meta)
 
     def __call__(self, lap: LapData) -> None:
         if self.tag_setup:
@@ -405,14 +537,13 @@ class LapSaver:
             st.upsert_car(m["game"], m["car_ordinal"], m.get("car_class") or 0, m.get("car_pi") or 0,
                           m.get("drivetrain") or 0, m.get("num_cylinders") or 0)
             kind = "sprint" if m["kind"] == "sprint" else "circuit"
-            first_lap = "first_lap" in (m.get("flags") or [])
-            track_id = st.find_or_create_track(
-                family=m["family"], game=m["game"], kind=kind, track_ordinal=m.get("track_ordinal"),
-                start_x=m["start_x"], start_z=m["start_z"], length_m=m["distance_m"], first_lap=first_lap)
+            flags = set(m.get("flags") or [])
+            first_lap = "first_lap" in flags
+            track_id = self._match_track(m, kind, first_lap, partial="partial_start" in flags)
             m["track_id"] = track_id
-            track = st.get_track(track_id)
+            track = st.get_track(track_id) if track_id is not None else None
             ref = track.get("ref_length_m") if track else None
-            if kind == "sprint":
+            if kind == "sprint" and track_id is not None:
                 # 冲刺赛：比已知最长距离短一截 = 中途放弃
                 if ref and m["distance_m"] < SPRINT_FINISH_RATIO * ref:
                     m["is_complete"] = False
@@ -426,18 +557,51 @@ class LapSaver:
                 if sid is None:
                     sid = st.create_session(m["game"], m["fmt"], self.source, m["car_ordinal"], track_id)
                     self._sessions[m["event_id"]] = sid
+                elif track_id is not None:
+                    self._backfill_event_track(sid, track_id)
             m["session_id"] = sid
             lap_id = st.save_lap(lap)
-            if kind == "circuit" and m.get("is_complete") and not first_lap:
+            if kind == "circuit" and track_id is not None and m.get("is_complete") and not first_lap:
                 # 赛道参考圈长 = 飞驰圈距离的中位数（站立起步的第一圈不算，它可能多跑了发车格到线的那段）
                 st.refresh_circuit_length(track_id)
             self.saved_ids.append(lap_id)
+            self.revision += 1
             log.info("已存档：#%d %s 第 %d 圈 %.3f s（%s）", lap_id, m["kind"], m["lap_number"],
                      m["lap_time"], "完整" if m["is_complete"] else "不完整")
         except Exception:
             log.exception("存档失败")
             return
         self._after_save(lap)
+
+    def _match_track(self, m: dict, kind: str, first_lap: bool, partial: bool) -> int | None:
+        """找（或新建）这一圈所在的赛道，返回 track id。
+
+        中途接入的圈（partial_start）只有后半段数据，距离是半截的：
+        - 赛道赛：起终点线位置是对的，但不能拿半截长度去比圈长，光看位置又认不准——
+          共用一条起终点线的布局可能有好几个，而且当前跑的可能是库里还没有的新布局（附近“正好一条”也不说明就是它）。
+          所以先不归到任何赛道（track_id = None），等同一场里第一个完整圈认出赛道后，
+          _save 再把这场里没归赛道的圈和会话一起补上（见 _backfill_event_track）。
+        - 冲刺赛：连起点都是中途的某个位置，认不出是哪条路线，同样不归（同一场后面不会再有别的圈，也就不补）。
+        有赛道 ID（FM2023）的游戏不受影响：按 ID 认，和长度无关。
+        """
+        if partial and not m.get("track_ordinal"):
+            return None
+        return self.store.find_or_create_track(
+            family=m["family"], game=m["game"], kind=kind, track_ordinal=m.get("track_ordinal"),
+            start_x=m["start_x"], start_z=m["start_z"], length_m=m["distance_m"], first_lap=first_lap and not partial)
+
+    def _backfill_event_track(self, session_id: int, track_id: int) -> None:
+        """本场第一圈是中途接入、没归赛道（track_id = None）：后面的整圈认出赛道后，
+        把这场（同一个会话）里还没归赛道的圈、以及会话本身补上这条赛道。"""
+        st = self.store
+        st.execute("UPDATE sessions SET track_id=? WHERE id=? AND track_id IS NULL", (track_id, session_id))
+        st.execute("UPDATE laps SET track_id=? WHERE session_id=? AND track_id IS NULL", (track_id, session_id))
+        # 动力总成数据（forza/powertrain.py）存了一份圈的 track_id，算改终传预测时按它筛选，也要跟着补
+        try:
+            st.execute("UPDATE powertrain_laps SET track_id=? WHERE track_id IS NULL AND lap_id IN "
+                       "(SELECT id FROM laps WHERE session_id=?)", (track_id, session_id))
+        except Exception:     # 表还没建（这台车还没存过动力总成数据）：没什么要补的
+            pass
 
     def _after_save(self, lap: LapData) -> None:
         """存好之后的附加处理和监听：每个单独 try，出错只记日志，不算“存档失败”，也不影响别的监听。"""

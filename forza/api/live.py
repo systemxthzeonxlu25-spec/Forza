@@ -16,12 +16,13 @@ async def ws_live(ws: WebSocket):
     await ws.app.state.rt.live.serve_client(ws)
 
 
+# 下面两个路由都用 async def：和收包在同一个事件循环里执行，读 hub / 切圈器状态时不会和收包并发
 @router.get("/api/live/snapshot")
-def live_snapshot(request: Request):
+async def live_snapshot(request: Request):
     text = request.app.state.rt.live.message_text()
     return Response(text, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api/live/summaries")
-def live_summaries(request: Request):
+async def live_summaries(request: Request):
     return {"items": request.app.state.rt.live.recent_summaries()}

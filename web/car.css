@@ -1,10 +1,6 @@
-/* 车辆调校页（car.html）。颜色变量来自 common.css；版本 A = --accent（蓝），版本 B = --accent-2（橙），和对比页一致。 */
-:root {
-  --gain: #2ec4b6;      /* 变快（青色，红绿色盲也分得开） */
-}
+/* 车辆调校页（car.html）。颜色变量来自 common.css；版本 A = --accent（陶土橙），版本 B = --accent-2（天蓝），和对比页一致。 */
 
 .car-page { max-width: 1200px; }
-.car-page h1 { font-size: 20px; margin: 0; }
 .car-page h2 { font-size: 16px; margin: 0; }
 .small { font-size: 13px; }
 .grow { flex: 1; }
@@ -17,12 +13,12 @@
 .car-msg { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
 .car-msg.err { color: var(--bad); }
 .small-btn { padding: 4px 10px; font-size: 13px; border-radius: 7px; white-space: nowrap; }
-button.link { background: none; border: none; padding: 2px 4px; color: var(--accent); font-size: 13px; }
+button.link { background: none; border: none; padding: 2px 4px; color: var(--accent-text); font-size: 13px; }
 button.link:hover { text-decoration: underline; }
 button[disabled] { opacity: .6; cursor: progress; }
 .tag-a, .tag-b {
   display: inline-block; min-width: 18px; padding: 0 4px; border-radius: 5px;
-  text-align: center; color: #0d0f12; font-weight: 700; font-size: 12px; line-height: 1.5;
+  text-align: center; color: var(--on-accent); font-weight: 700; font-size: 12px; line-height: 1.5;
 }
 .tag-a { background: var(--accent); }
 .tag-b { background: var(--accent-2); }
@@ -30,7 +26,7 @@ button[disabled] { opacity: .6; cursor: progress; }
 .tip b { color: var(--text); font-weight: 600; }
 .hint {
   margin: 6px 0 0; padding: 6px 10px; border-radius: 8px; font-size: 13px;
-  background: rgba(245, 197, 66, 0.10); border: 1px solid rgba(245, 197, 66, 0.35); color: var(--text);
+  background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); color: var(--text);
 }
 .hint::before { content: "⚠ "; color: var(--warn); }
 .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
@@ -38,7 +34,7 @@ button[disabled] { opacity: .6; cursor: progress; }
 /* ---------------- 新建版本 ---------------- */
 .setup-form {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 12px;
 }
 .setup-form input { background: var(--panel); }
 .setup-form-btns { display: flex; gap: 8px; }
@@ -48,15 +44,15 @@ button[disabled] { opacity: .6; cursor: progress; }
 /* ---------------- 版本列表 ---------------- */
 .setup-list { display: flex; flex-direction: column; gap: 8px; }
 .setup-row {
-  border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 11px 14px; background: var(--panel-2);
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: start;
 }
-.setup-row.current { border-color: rgba(78, 161, 255, 0.6); }
+.setup-row.current { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
 .setup-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
 .setup-name strong { font-size: 15px; overflow-wrap: anywhere; }
 .setup-name .note { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .badge-cur {
-  font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent);
+  font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent-text);
   white-space: nowrap; line-height: 1.6;
 }
 .setup-stats { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 2px 16px; font-size: 13px; color: var(--muted); }
@@ -70,14 +66,14 @@ button[disabled] { opacity: .6; cursor: progress; }
 /* ---------------- 版本对比 ---------------- */
 .cmp-out { margin-top: 14px; }
 .verdict {
-  border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 12px; border: 1px solid var(--line);
   background: var(--panel-2); display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px;
 }
 .verdict .big { font-size: 22px; font-weight: 700; white-space: nowrap; }
 .verdict .msg { font-size: 14px; flex: 1 1 260px; min-width: 0; }
-.verdict.faster { border-color: rgba(46, 196, 182, 0.6); }
+.verdict.faster { border-color: color-mix(in srgb, var(--gain) 60%, transparent); }
 .verdict.faster .big { color: var(--gain); }
-.verdict.slower { border-color: rgba(255, 92, 92, 0.6); }
+.verdict.slower { border-color: color-mix(in srgb, var(--bad) 60%, transparent); }
 .verdict.slower .big { color: var(--bad); }
 .verdict.noise .big { color: var(--text); }
 .verdict.few .big { color: var(--warn); }
@@ -92,7 +88,7 @@ button[disabled] { opacity: .6; cursor: progress; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
 .legend i.hollow { background: none !important; border: 2px solid var(--muted); width: 9px; height: 9px; }
-.legend i.band { border-radius: 2px; background: rgba(255, 255, 255, 0.12); width: 14px; }
+.legend i.band { border-radius: 2px; background: color-mix(in srgb, var(--text) 12%, transparent); width: 14px; }
 .method { margin: 10px 0 0; }
 .cmp-out h3 { font-size: 14px; margin: 14px 0 6px; }
 

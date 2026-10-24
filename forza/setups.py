@@ -32,7 +32,8 @@ import statistics
 import threading
 import time
 from collections import OrderedDict
-from datetime import datetime
+
+from .util import now_iso, parse_flags
 
 log = logging.getLogger(__name__)
 
@@ -75,9 +76,6 @@ ONE_CHANGE_TIP = "建议一次只改一项，改完记一个新版本、跑 5 �
 class SetupError(ValueError):
     """参数不对 / 找不到版本，message 是给用户看的中文提示。"""
 
-
-def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
 
 
 def ensure_schema(store) -> None:
@@ -152,7 +150,7 @@ def create_setup(store, game: str, car_ordinal: int, name: str, note: str | None
     sid = store.execute(
         "INSERT INTO setups (game, car_ordinal, car_pi, engine_max_rpm, num_cylinders, name, note, created_at) "
         "VALUES (?,?,?,?,?,?,?,?)",
-        (game, int(car_ordinal), car_pi, engine_max_rpm, num_cylinders, name, note, _now()))
+        (game, int(car_ordinal), car_pi, engine_max_rpm, num_cylinders, name, note, now_iso()))
     activate(store, sid, at=at)
     return get_setup(store, sid)
 
@@ -202,14 +200,10 @@ def tag_lap_meta(store, meta: dict) -> dict | None:
 
 # ---------------------------------------------------------------- 统计
 
-def _flags(lap: dict) -> set:
-    return set(lap.get("flags") or [])
-
-
 def is_flying(lap: dict) -> bool:
     """完整的飞驰圈：赛道赛、跑完、不是站立起步的第一圈、没倒过带。"""
     return (lap.get("kind") == "lap" and bool(lap.get("is_complete")) and (lap.get("lap_time") or 0) > 0
-            and not (_flags(lap) & {"first_lap", "rewind"}))
+            and not (set(parse_flags(lap.get("flags"))) & {"first_lap", "rewind"}))
 
 
 def lap_time_stats(times: list[float]) -> dict:

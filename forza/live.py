@@ -16,7 +16,7 @@
 本圈小结（新圈存好之后）
 ------------------------
 LapSaver 存好一圈 → on_lap_saved()（在存档线程里调用，自己 try/except）→ 丢进 _pool：
-用 api.laps.default_reference 选参考圈（同赛道同车最快的完整圈，新圈自己最快就取第二快），
+用 Store.default_reference 选参考圈（同赛道同车最快的完整圈，新圈自己最快就取第二快），
 跑 analysis.compare，取总差距和丢时最多的几个弯的解释句。
 本圈或参考圈是起步圈（发车格在线后，这圈比飞驰圈长）时只报总差距、不列逐弯解释：
 compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十到上百米，逐弯结论是错的。
@@ -91,6 +91,7 @@ compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十
     },
     "race_time": 300.1, "position": 3
   },
+  "invalidated_summary_ids": [12],  # 最近被倒带作废的小结 id（手机从列表里删掉、正在显示的卡片收起）
   "last_summary": null | {       # 最近一圈存好后的小结（每条消息都带，手机按 id 判断是不是新的）
     "id": 12, "lap_id": 12, "t": 1760000000.0, "lap_number": 2, "kind": "lap", "lap_time": 83.4,
     "is_complete": true, "first_lap": false, "flags": [], "track_name": "...", "setup_name": null,
@@ -129,10 +130,11 @@ from fastapi import WebSocket
 
 from .frame import Frame
 from .lapdata import LapData
-from .laps import DIST_MISMATCH
+from .laps import should_use_integrated_distance
 from .netinfo import lan_ips
 from .packet import FORMATS
 from .profiles import get_profile
+from .util import is_standing_first_lap, lap_has_flag, parse_flags, round_or_none
 
 log = logging.getLogger(__name__)
 
@@ -155,15 +157,7 @@ except ImportError:              # 存储模块改了常量名时退回默认值
     TRACK_START_RADIUS_M, TRACK_LENGTH_TOL = 60.0, 0.04
 
 
-def _r(x, nd: int = 2):
-    """数值取舍；NaN / inf / 不是数 → None（JSON 里不能出现 NaN，否则浏览器解析会失败）。"""
-    try:
-        x = float(x)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(x):
-        return None
-    return round(x, nd)
+_r = round_or_none     # 这个模块里用得太多，起个短名字
 
 
 def _r4(vals, nd: int = 2) -> list:
@@ -176,28 +170,19 @@ def _pos(x) -> float | None:
     return v if v is not None and v > 0 else None
 
 
-def _flags(v) -> list:
-    """laps.flags 列：库里是 JSON 文本，meta 里是列表。"""
-    if isinstance(v, str):
-        try:
-            v = json.loads(v or "[]")
-        except ValueError:
-            return []
-    return list(v or [])
-
-
 # ====================================================================== 赛道匹配（只查不建）
 
 def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: float | None,
                 z: float | None, length_m: float | None = None, length_tol: float | None = TRACK_LENGTH_TOL,
-                car_ordinal: int | None = None, game: str | None = None) -> int | None:
+                car_ordinal: int | None = None, game: str | None = None, guess: bool = True) -> int | None:
     """按 storage.find_or_create_track 的规则找已有赛道，找不到返回 None（不新建）。
 
     - 有 TrackOrdinal（FM2023）：按 ordinal
     - 否则：起点坐标相距 < TRACK_START_RADIUS_M；赛道赛再按圈长：
         length_tol 不为 None：圈长差 < length_tol（和存档时一样），多个候选取 id 最小的（存档时也是取第一个）
         length_tol 为 None（只知道起步圈的长度，可能偏长）：取圈长最接近的
-        不知道圈长：取这台车在上面跑过最多完整圈的
+        不知道圈长：附近只有一条就是它；有好几条时 guess=True 取这台车在上面跑过最多完整圈的，
+                    guess=False 返回 None（中途接入、还没跑完一圈飞驰圈时用：宁可先不显示 PB，也不拿错的布局比）
       冲刺赛只看起点，多个候选取最近的。
     """
     if track_ordinal:
@@ -221,15 +206,21 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
         return min(cands, key=lambda c: (c[1], c[0]["id"]))[0]["id"]
     if length_m and length_m > 0:
         if length_tol is not None:
+            # 参考圈长对得上的优先；参考圈长为空的（还没飞驰圈，或飞驰圈都被删 / 作废了）只在没有对得上的时候才用，
+            # 否则共用起终点线时，一条空长度的旧布局会抢在真正匹配的布局前面
             ok = [r for r, _ in cands
-                  if not r["ref_length_m"] or abs(r["ref_length_m"] - length_m) / r["ref_length_m"] <= length_tol]
-            return ok[0]["id"] if ok else None
+                  if r["ref_length_m"] and abs(r["ref_length_m"] - length_m) / r["ref_length_m"] <= length_tol]
+            unknown = [r for r, _ in cands if not r["ref_length_m"]]
+            pick = ok or unknown
+            return pick[0]["id"] if pick else None
         with_len = [(r, abs(r["ref_length_m"] - length_m)) for r, _ in cands if r["ref_length_m"]]
         if with_len:
             return min(with_len, key=lambda c: (c[1], c[0]["id"]))[0]["id"]
         return cands[0][0]["id"]
     if len(cands) == 1:
         return cands[0][0]["id"]
+    if not guess:
+        return None
     best_id, best_n = cands[0][0]["id"], -1
     for r, _ in cands:
         sql = "SELECT COUNT(*) AS n FROM laps WHERE track_id=? AND is_complete=1"
@@ -248,7 +239,7 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
 
 def _ref_arrays(lap: LapData) -> tuple[np.ndarray, np.ndarray, bool]:
     """存档圈的 (距离, 时间, 是否速度积分距离)，距离做成单调的（np.interp 要求）。"""
-    integrated = "dist_integrated" in _flags(lap.meta.get("flags"))
+    integrated = lap_has_flag(lap.meta, "dist_integrated")
     rd = np.maximum.accumulate(np.asarray(lap.ch["dist"], dtype=np.float64))
     rt_ = np.asarray(lap.ch["t"], dtype=np.float64)
     return rd, rt_, integrated
@@ -288,13 +279,12 @@ def _first_lap_summary(d: float | None, first: bool, ref_first: bool) -> str:
 
 
 def build_lap_summary(store, lap: LapData) -> dict:
-    """新圈存好后的小结：和参考圈（default_reference）对比的总差距 + 丢时最多的几个弯。纯计算 + 读库。"""
+    """新圈存好后的小结：和参考圈（Store.default_reference）对比的总差距 + 丢时最多的几个弯。纯计算 + 读库。"""
     from .analysis import compare
-    from .api.laps import default_reference
 
     m = lap.meta
-    flags = _flags(m.get("flags"))
-    first = "first_lap" in flags and m.get("kind") != "sprint"
+    flags = parse_flags(m.get("flags"))
+    first = is_standing_first_lap(m)
     out = {
         "id": m.get("id"), "lap_id": m.get("id"), "t": round(time.time(), 3),
         "lap_number": m.get("lap_number"), "kind": m.get("kind"),
@@ -314,13 +304,13 @@ def build_lap_summary(store, lap: LapData) -> dict:
     if out["track_name"] is None and m.get("track_id") is not None:
         with suppress(Exception):
             out["track_name"] = (store.get_track(m["track_id"]) or {}).get("name")
-    ref_meta = default_reference(store, m) if m.get("id") is not None else None
+    ref_meta = store.default_reference(m) if m.get("id") is not None else None
     if ref_meta is None:
         out["summary"] = "这条赛道 + 这台车的第一个完整圈，还没有参考圈可比"
         out["note"] = "；".join(notes) or None
         return out
     ref = store.get_lap(ref_meta["id"])
-    ref_first = "first_lap" in _flags(ref_meta.get("flags")) and ref_meta.get("kind") != "sprint"
+    ref_first = is_standing_first_lap(ref_meta)
     out["ref"] = {"id": ref_meta["id"], "lap_number": ref_meta.get("lap_number"),
                   "lap_time": _r(ref_meta.get("lap_time"), 3), "first_lap": ref_first}
     if ref_first:
@@ -386,6 +376,7 @@ class LiveBroadcaster:
         # 本圈小结
         self.summaries: deque[dict] = deque(maxlen=SUMMARY_KEEP)
         self.last_summary: dict | None = None
+        self.invalidated_summary_ids: deque[int] = deque(maxlen=SUMMARY_KEEP)   # 被倒带作废的小结，告诉已经打开的手机
         # 历史最快（PB）
         self._pb_ver = 0                 # 每存好一圈 +1：PB 可能变了，重新查
         self._pb_cache: dict[tuple, dict] = {}
@@ -457,6 +448,23 @@ class LiveBroadcaster:
         self.invalidate()
         log.info("本圈小结：#%s %s", s["id"], s["summary"])
 
+    def on_lap_invalidated(self, meta: dict) -> None:
+        self._pb_ver += 1
+        self._pb_cache.clear()
+        self._pb_last.clear()
+        # 删除小结也丢进后台队列：排在正在生成的小结之后，免得刚删掉又被生成出来
+        self._submit(self._remove_summary, meta["id"])
+        self.invalidate()
+
+    def _remove_summary(self, lap_id: int) -> None:
+        self.summaries = deque((s for s in self.summaries if s.get("id") != lap_id),
+                               maxlen=self.summaries.maxlen)
+        if self.last_summary is not None and self.last_summary.get("id") == lap_id:
+            # 不退回到上一条：手机会把它当成“新小结”再弹一次卡片。之后连上的手机从 /api/live/summaries 拿列表
+            self.last_summary = None
+        self.invalidated_summary_ids.append(lap_id)
+        self.invalidate()
+
     def recent_summaries(self) -> list[dict]:
         """最近的小结，新的在前。"""
         return list(reversed(self.summaries))
@@ -477,6 +485,7 @@ class LiveBroadcaster:
                     log.debug("组装圈速信息出错", exc_info=True)
             msg["lap"] = lap
         msg["last_summary"] = self.last_summary
+        msg["invalidated_summary_ids"] = list(self.invalidated_summary_ids)
         msg["status"] = self._status_block()
         return msg
 
@@ -555,9 +564,7 @@ class LiveBroadcaster:
             return None
         det = self.rt.detector
         ev, cur = det.event, det.cur
-        st_kind = None
-        if ev is not None:
-            st_kind = "circuit" if ev.boundaries else ("sprint?" if ev.family == "fh" and ev.saw_position else "lap")
+        st_kind = det.event_kind()
         in_lap = ev is not None and cur is not None and cur.lap_number == fr.lap_number
         lap_t = cur.last_t if in_lap else (fr.current_lap if fr.current_lap > 0 else None)
         first_lap = bool(in_lap and "first_lap" in cur.flags and st_kind != "sprint?")
@@ -614,7 +621,7 @@ class LiveBroadcaster:
         if ev is not None and ev.best_lap is not None and ev.best_time is not None:
             cands.append((float(ev.best_time), "best", ev.best_lap))
         pend = det.pending
-        if pend is not None and len(pend.rows) > 1:
+        if pend is not None and len(pend.rows) > 1 and "partial_start" not in pend.flags:
             # 挂起圈的圈时：和切圈器落盘时一样，优先用游戏给的 LastLap
             t = fr.last_lap if fr.lap_number == pend.lap_number + 1 and fr.last_lap > 0 else pend.last_t
             if t > 0:
@@ -626,18 +633,15 @@ class LiveBroadcaster:
         c = self._ref_cache
         if c is None or c[0] != key:
             if kind == "best":
-                integrated = "dist_integrated" in (obj.meta.get("flags") or [])
+                integrated = lap_has_flag(obj.meta, "dist_integrated")
                 rd = np.asarray(obj.ch["dist"], dtype=np.float64)
                 rt_ = np.asarray(obj.ch["t"], dtype=np.float64)
             else:
                 rt_ = np.asarray([r[0] for r in obj.rows], dtype=np.float64)
                 d_field = np.asarray([r[1] for r in obj.rows], dtype=np.float64)
                 d_int = np.asarray(obj.idist, dtype=np.float64)
-                # 和切圈器 _emit 的规则一致：DistanceTraveled 对不上速度积分（或不单调）就用积分距离
-                total_int = float(d_int[-1]) if len(d_int) else 0.0
-                total_field = float(d_field[-1]) if len(d_field) else 0.0
-                monotonic = bool(np.all(np.diff(d_field) >= -0.5))
-                integrated = total_int > 50 and (not monotonic or abs(total_field - total_int) / total_int > DIST_MISMATCH)
+                # 和切圈器存圈时用同一个判断，保证挂起圈落盘前后距离口径不变
+                integrated = should_use_integrated_distance(d_field, d_int)
                 rd = d_int if integrated else d_field
             rd = np.maximum.accumulate(rd)   # np.interp 要求 x 单调
             c = self._ref_cache = (key, rd, rt_, integrated)
@@ -651,7 +655,7 @@ class LiveBroadcaster:
             return None
         q = {"family": ev.family, "game": ev.game, "car_ordinal": ev.car_ordinal,
              "car_pi": int(fr.car_pi or 0), "track_ordinal": None, "x": None, "z": None,
-             "length_m": None, "length_tol": None}
+             "length_m": None, "length_tol": None, "guess": True}
         if fr.track_ordinal:                      # FM2023：一开始就知道是哪条赛道
             q.update(kind="circuit", track_ordinal=int(fr.track_ordinal))
             tkey = ("ord", int(fr.track_ordinal))
@@ -660,16 +664,21 @@ class LiveBroadcaster:
             tkey = ("sprint", round(ev.start_x, 1), round(ev.start_z, 1))
         elif st_kind == "circuit" and ev.line_x is not None:
             # 赛道赛：第一次过线后按过线位置匹配；共用起点线的布局再按圈长区分
-            flying = ev.lap_lengths[1:]           # [0] 是起步圈（发车格起步，可能偏长）
+            # 只拿飞驰圈的长度去区分布局：站立起步的第一圈多跑了发车格到线那段，偏长。
+            # （不能简单地丢掉 lap_lengths[0]：中途接入时第一圈是不完整的，根本不在列表里，[0] 已经是飞驰圈了）
+            flying = ev.flying_lengths
             if flying:
                 length, tol = statistics.median(flying), TRACK_LENGTH_TOL
             elif ev.lap_lengths:
                 length, tol = ev.lap_lengths[0], None
-            elif det.pending is not None:
-                length, tol = det._buf_distance(det.pending), None
+            elif det.pending is not None and "partial_start" not in det.pending.flags:
+                # 挂起圈是中途接入的半圈时长度是半截的，不能拿来比
+                length, tol = det.buf_distance(det.pending), None
             else:
                 length, tol = None, None
-            q.update(kind="circuit", x=ev.line_x, z=ev.line_z, length_m=length, length_tol=tol)
+            # 中途接入、还不知道圈长时不许猜布局（见 match_track 的 guess）
+            q.update(kind="circuit", x=ev.line_x, z=ev.line_z, length_m=length, length_tol=tol,
+                     guess=not (length is None and ev.partial_start))
             tkey = ("line", round(ev.line_x, 1), round(ev.line_z, 1),
                     None if length is None else round(length / 10.0), tol)
         else:
@@ -725,6 +734,9 @@ class LiveBroadcaster:
         except Exception:
             log.exception("查询历史最快圈出错")
             res = {"state": "none", "reason": "查询出错"}
+        if key[-1] != self._pb_ver:
+            self._pb_jobs.discard(key)
+            return  # A save/invalidation superseded this query while it was running.
         for cache, k in ((self._pb_cache, key), (self._pb_last, key[:-1])):
             cache[k] = res
             while len(cache) > PB_CACHE_KEEP:
@@ -732,11 +744,12 @@ class LiveBroadcaster:
         self._pb_jobs.discard(key)
 
     def _lookup_pb(self, *, family, game, car_ordinal, car_pi, kind, track_ordinal, x, z,
-                   length_m, length_tol) -> dict:
+                   length_m, length_tol, guess=True) -> dict:
         """（后台线程）找赛道 → 找同车最快完整圈 → 解压出距离 / 时间数组。"""
         store = self.rt.store
         track_id = match_track(store, family=family, kind=kind, track_ordinal=track_ordinal, x=x, z=z,
-                               length_m=length_m, length_tol=length_tol, car_ordinal=car_ordinal, game=game)
+                               length_m=length_m, length_tol=length_tol, car_ordinal=car_ordinal, game=game,
+                               guess=guess)
         if track_id is None:
             return {"state": "none", "reason": "这条赛道还没有存过圈"}
         rows = store.query(
@@ -744,7 +757,7 @@ class LiveBroadcaster:
             "AND is_complete=1 AND lap_time > 0 ORDER BY lap_time ASC LIMIT ?",
             (track_id, car_ordinal, game, PB_SCAN_LIMIT))
         if kind == "circuit":   # 起步圈的起点和距离零点不一样，不拿来当参照
-            rows = [r for r in rows if "first_lap" not in _flags(r["flags"])]
+            rows = [r for r in rows if not lap_has_flag(r, "first_lap")]
         if not rows:
             return {"state": "none", "reason": "这台车在这条赛道上还没有完整的飞驰圈", "track_id": track_id}
         same = [r for r in rows if car_pi and r["car_pi"] == car_pi]
@@ -761,9 +774,14 @@ class LiveBroadcaster:
                 "car_pi": best["car_pi"], "pi_match": pi_match, "rd": c[1], "rt": c[2], "integrated": c[3]}
 
     # ---------------- 状态 ----------------
-    def _lan_ips(self) -> list[str]:
+    def lan_ips_cached(self) -> list[str]:
+        """局域网 IP（缓存）。在事件循环里调用，不能卡收包：
+
+        平时只读 run() 在后台线程里定期刷新的结果。只有程序刚启动、后台还没刷过一次时同步查一次——
+        这时 netinfo 自己的缓存刚被启动横幅填过，很快返回。
+        """
         if self._ips is None:
-            self._ips = lan_ips()   # 第一次同步查；之后由 run() 在后台刷新
+            self._ips = lan_ips()
         return self._ips
 
     def _status_block(self) -> dict:
@@ -790,7 +808,7 @@ class LiveBroadcaster:
             "replay": getattr(self.rt, "replay_path", None),
             "udp_port": cfg.udp_port,
             "http_port": cfg.http_port,
-            "lan_ips": self._lan_ips(),
+            "lan_ips": self.lan_ips_cached(),
             "clients": len(self.clients),
         }
         self._status_cache = (now, ver, st)

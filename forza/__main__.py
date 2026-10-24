@@ -17,7 +17,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from .config import load_config
+from .config import ConfigError, load_config
 from .profiles import PROFILES
 
 GAME_CHOICES = [k for k in PROFILES if k not in ("fm", "fh")]
@@ -29,12 +29,13 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _apply_common(cfg, args) -> None:
-    for name in ("udp_port", "http_port", "db_path", "game", "tire_temp_unit"):
+    for name in ("udp_host", "udp_port", "http_host", "http_port", "db_path", "game", "tire_temp_unit"):
         v = getattr(args, name, None)
         if v is not None:
             setattr(cfg, name, v)
     if getattr(args, "forward", None):
         cfg.forward = args.forward
+    cfg.validate()        # 命令行覆盖完再统一检查一遍（不对就抛 ConfigError，main() 里转成中文提示）
 
 
 def cmd_serve(args) -> None:
@@ -70,6 +71,9 @@ def cmd_record(args) -> None:
         try:
             while args.duration is None or time.monotonic() - t0 < args.duration:
                 await asyncio.sleep(2)
+                if hub.recorder is None:      # 写文件失败，Hub 已经自动停了录制：别假装还在录
+                    print(f"  {hub.record_error or '录制已停止'}", flush=True)
+                    break
                 st = hub.status()
                 print(f"  已收 {st['packets']} 包，{st['pps']:.0f} 包/秒，格式 {st['format_label'] or '-'}",
                       flush=True)
@@ -113,6 +117,7 @@ def cmd_import(args) -> None:
         det = LapDetector()
         saver = LapSaver(store, f"import:{Path(f).name}", background=False)
         det.add_listener(saver)
+        det.add_invalidation_listener(saver.invalidate)
         hub.subscribe(det.on_frame)
         n = import_file(f, hub)
         det.flush()
@@ -147,7 +152,9 @@ def cmd_info(args) -> None:
     from .laps import LapDetector
     from .recorder import iter_records, read_meta
 
-    frame_mod.TIRE_TEMP_UNIT = load_config().tire_temp_unit
+    cfg = load_config()
+    cfg.validate()        # info 不走 _apply_common，这里单独检查（胎温单位写错会让整份报告的胎温都不对）
+    frame_mod.TIRE_TEMP_UNIT = cfg.tire_temp_unit
     meta = read_meta(args.file)
     hub = Hub(args.game)
     det = LapDetector()
@@ -181,14 +188,16 @@ def _fmt_time(s: float | None) -> str:
     return f"{int(m)}:{sec:06.3f}"
 
 
-def main(argv=None) -> None:
+def main(argv=None) -> int | None:
     p = argparse.ArgumentParser(prog="python -m forza", description="Forza Data Out 遥测分析工具")
     p.add_argument("-v", "--verbose", action="store_true", help="输出调试日志")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def common(sp, http=True):
+        sp.add_argument("--udp-host", help="UDP 监听地址（仅本机采样可设 127.0.0.1）")
         sp.add_argument("--udp-port", type=int, help="UDP 端口（默认 5555）")
         if http:
+            sp.add_argument("--http-host", help="网页监听地址（仅本机访问可设 127.0.0.1）")
             sp.add_argument("--http-port", type=int, help="网页端口（默认 8000）")
         sp.add_argument("--game", choices=GAME_CHOICES, help="指定游戏（324 字节包分不出 FH4/5/6 时用）")
         sp.add_argument("--db", dest="db_path", help="数据库路径（默认 data/forza.db）")
@@ -247,7 +256,11 @@ def main(argv=None) -> None:
 
     args = p.parse_args(argv)
     _setup_logging(args.verbose)
-    args.func(args)
+    try:
+        args.func(args)
+    except ConfigError as e:
+        print(f"配置有误：{e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

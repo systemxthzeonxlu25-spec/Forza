@@ -174,6 +174,7 @@ class Hub:
         self.ring: PacketRing | None = PacketRing(ring_seconds) if ring_seconds and ring_seconds > 0 else None
         self._subs: list[Subscriber] = []
         self.latest: Frame | None = None
+        self.record_error: str | None = None        # 录制中途写文件失败的原因（重新开始录制时清掉）
         self.packets = 0
         self.sizes: Counter[int] = Counter()
         self.last_packet_at: float | None = None   # time.monotonic()
@@ -201,7 +202,18 @@ class Hub:
         if self.ring is not None:
             self.ring.append(t, data)
         if self.recorder is not None:
-            self.recorder.write(data)
+            try:
+                self.recorder.write(data)
+            except OSError:
+                # 磁盘写满 / 文件被占用：停掉录制，别让它拖垮后面的解码和切圈
+                log.exception("写录像失败，已停止录制：%s", self.recorder.path)
+                rec, self.recorder = self.recorder, None
+                # 记下原因：网页状态栏 / 录制状态接口会显示出来，不然用户以为还在录
+                self.record_error = f"写录像失败，已自动停止录制（{rec.count} 个包已保存到 {rec.path}）"
+                try:
+                    rec.close()
+                except OSError:
+                    pass
         for addr in self._fwd_addrs:
             try:
                 self._fwd_sock.sendto(data, addr)  # type: ignore[union-attr]
@@ -224,6 +236,7 @@ class Hub:
         if self.recorder is not None:
             raise RuntimeError(f"已经在录制：{self.recorder.path}")
         self.recorder = Recorder(path, meta={"source": self.source, **(meta or {})})
+        self.record_error = None
         log.info("开始录制：%s", self.recorder.path)
         return self.recorder
 
@@ -238,7 +251,10 @@ class Hub:
     def pps(self) -> float:
         """最近 1 秒的每秒包数。"""
         now = time.monotonic()
-        return float(sum(1 for x in self._recent if now - x <= 1.0))
+        # 先整体拷贝一份再数：tuple(deque) 在 C 里一次做完，不会被收包线程打断；
+        # 直接边遍历边数的话，别的线程同时 append 会抛 “deque mutated during iteration”
+        recent = tuple(self._recent)
+        return float(sum(1 for x in recent if now - x <= 1.0))
 
     def status(self) -> dict:
         f = self.latest
@@ -249,7 +265,7 @@ class Hub:
             "packets": self.packets,
             "pps": self.pps(),
             "since_last_packet": None if self.last_packet_at is None else round(now - self.last_packet_at, 2),
-            "sizes": {str(k): v for k, v in self.sizes.items()},
+            "sizes": {str(k): v for k, v in dict(self.sizes).items()},   # 先拷贝，理由同 pps()
             "format": f.fmt if f else None,
             "format_label": FORMATS[f.fmt].label if f and f.fmt in FORMATS else None,
             "game": f.game if f else None,
@@ -257,5 +273,6 @@ class Hub:
             "game_note": prof.note if prof else None,
             "has_dash": f.has_dash if f else None,
             "recording": str(self.recorder.path) if self.recorder else None,
-            "warnings": list(self.decoder.warnings.values()),
+            "warnings": list(self.decoder.warnings.values()) + ([self.record_error] if self.record_error else []),
+            "record_error": self.record_error,
         }

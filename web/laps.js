@@ -10,10 +10,7 @@
 
   // ------------------------------------------------------------------ 小工具
   const $ = (sel, root = document) => root.querySelector(sel);
-  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const rootCss = getComputedStyle(document.documentElement);
-  const cssVar = (name, fb) => rootCss.getPropertyValue(name).trim() || fb;
+  const { esc, cssVar } = F;      // 公用的 HTML 转义 / 读 CSS 变量（见 common.js）
   const COL = {
     a: cssVar("--accent", "#4ea1ff"),
     b: cssVar("--accent-2", "#ff9f43"),
@@ -24,8 +21,9 @@
     muted: cssVar("--muted", "#8b929c"),
     line: cssVar("--line", "#2c313a"),
     panel2: cssVar("--panel-2", "#20242b"),
+    halo: cssVar("--halo", "#0d0f12"),
   };
-  const GRID = "rgba(255,255,255,0.06)";
+  const GRID = cssVar("--grid", "rgba(255,255,255,0.06)");
   const DPR = () => window.devicePixelRatio || 1;
 
   function hexRgb(hex) {
@@ -422,6 +420,9 @@
     if (f.includes("rewind")) out.push(`<span class="badge rewind" title="这圈中途倒过带">倒带</span>`);
     if (f.includes("abandoned")) out.push(`<span class="badge incomplete" title="冲刺赛中途退出">放弃</span>`);
     if (f.includes("dist_integrated")) out.push(`<span class="badge" title="游戏给的距离不可靠，改用车速积分算距离">距离估算</span>`);
+    if (f.includes("partial_start")) out.push(`<span class="badge incomplete" title="采集开始时这一圈已经在进行，缺少前段数据">中途接入</span>`);
+    if (f.includes("finish_inferred")) out.push(`<span class="badge" title="根据计时和距离估计完赛，尚未由游戏完赛画面核实">完赛推定</span>`);
+    if (f.includes("rewound_after_save")) out.push(`<span class="badge incomplete" title="落盘后倒带跨回本圈，原成绩已失效">倒带失效</span>`);
     if (l.setup_id != null) {
       const nm = setupName(l.setup_id, l.setup_name);
       out.push(`<span class="badge setup" title="调校版本：${esc(nm)}">${esc(nm)}</span>`);
@@ -957,7 +958,7 @@
             ctx.fillStyle = alpha(COL.a, 0.07);
             ctx.fillRect(x0, top, x1 - x0, height);
           }
-          ctx.fillStyle = "rgba(255,255,255,0.05)";
+          ctx.fillStyle = alpha(COL.text, 0.06);
           for (const s of res.segments) {
             if (s.kind !== "corner") continue;
             const x0 = u.valToPos(s.start_m, "x", true), x1 = u.valToPos(s.end_m, "x", true);
@@ -1377,9 +1378,9 @@
       const lb = c.label || c.name;
       const tw = ctx.measureText(lb).width + 8;
       const on = c.name === S.selSeg;
-      ctx.fillStyle = on ? COL.text : "rgba(13,15,18,0.82)";
+      ctx.fillStyle = on ? COL.text : alpha(COL.halo, 0.85);
       roundRect(ctx, lx - tw / 2, ly - 9, tw, 18, 5); ctx.fill();
-      ctx.fillStyle = on ? "#0d0f12" : COL.text;
+      ctx.fillStyle = on ? COL.halo : COL.text;
       ctx.fillText(lb, lx, ly + 0.5);
     }
     drawMapOverlay();
@@ -1414,7 +1415,7 @@
           const [px, py] = mapPosAt(side === "ref" ? "a" : "b", d);
           shapePath(ctx, shape, px, py, r);
           ctx.fillStyle = col; ctx.fill();
-          ctx.lineWidth = 1.5; ctx.strokeStyle = "#0d0f12"; ctx.stroke();
+          ctx.lineWidth = 1.5; ctx.strokeStyle = COL.halo; ctx.stroke();
         }
       }
     }
@@ -1457,7 +1458,7 @@
       const [px, py] = mapPosAt(side, d);
       ctx.beginPath(); ctx.arc(px, py, MAP.zoomed ? 5 : 7, 0, Math.PI * 2);
       ctx.fillStyle = col; ctx.fill();
-      ctx.lineWidth = 3; ctx.strokeStyle = "#0d0f12"; ctx.stroke();
+      ctx.lineWidth = 3; ctx.strokeStyle = COL.halo; ctx.stroke();
     }
   }
 

@@ -33,11 +33,11 @@ import json
 import logging
 import math
 import statistics
-from datetime import datetime
 
 import numpy as np
 
 from .lapdata import LapData
+from .util import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -103,9 +103,6 @@ BACKFILL_LAPS = 40            # 第一次查某台车时，最多给最近这么
 DRIVEN = {0: ("fl", "fr"), 1: ("rl", "rr"), 2: ("fl", "fr", "rl", "rr")}
 UNDRIVEN = {0: ("rl", "rr"), 1: ("fl", "fr"), 2: ("fl", "fr", "rl", "rr")}
 
-
-def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
 
 
 def ensure_schema(store) -> None:
@@ -284,7 +281,7 @@ def update_ratios(store, game: str, car_ordinal: int, lap_id: int | None, observ
     ensure_schema(store)
     cache = _cached_ratios(store, game, car_ordinal)
     obs = {int(g): (float(v[0]), int(v[1])) for g, v in (observed or {}).items()}
-    now = _now()
+    now = now_iso()
     changed: dict[int, float] = {}
     for g, (r, nsamp) in obs.items():
         old = cache.get(g)
@@ -338,7 +335,7 @@ def record_lap(store, lap: LapData) -> dict | None:
         "INSERT OR REPLACE INTO powertrain_laps (lap_id, game, car_ordinal, car_pi, track_id, drivetrain, "
         "engine_max_rpm, engine_idle_rpm, created_at, data) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (lap_id, m["game"], m["car_ordinal"], m.get("car_pi"), m.get("track_id"), m.get("drivetrain"),
-         m.get("engine_max_rpm"), m.get("engine_idle_rpm"), m.get("created_at") or _now(),
+         m.get("engine_max_rpm"), m.get("engine_idle_rpm"), m.get("created_at") or now_iso(),
          json.dumps(a, ensure_ascii=False)))
     if a["ratios"]:
         a["ratio_update"] = update_ratios(store, m["game"], m["car_ordinal"], lap_id, a["ratios"])

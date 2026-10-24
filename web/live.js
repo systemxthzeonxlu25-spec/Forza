@@ -125,11 +125,14 @@
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
   const num = (x) => typeof x === "number" && isFinite(x);
   const signed = (x, d = 2) => (num(x) ? (x < 0 ? "−" : "") + Math.abs(x).toFixed(d) : "--");
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const esc = Forza.esc;      // 公用的 HTML 转义（见 common.js）
 
   // ======================= 颜色 =======================
-  // 胎温 → 颜色：冷蓝 → 理想绿 → 偏热黄 → 过热红
-  const C_COLD = [59, 130, 246], C_OK = [46, 204, 113], C_WARM = [245, 197, 66], C_HOT = [255, 77, 77];
+  // 胎温 → 颜色：冷蓝 → 理想绿 → 偏热黄 → 过热红。
+  // 开车时只用余光扫一眼，四档必须一眼分得开：色相拉开（蓝 210° / 绿 94° / 黄 43° / 红 4°），
+  // “偏热黄”和“过热红”的亮度也拉开一倍多（对比度 2.35:1），不能只靠颜色深浅区分。
+  // 色调仍取 Claude 配色里偏暖、偏柔的那一族（Sky 蓝 / 亮一档的 Olive / 琥珀 / Clay 红），深色底上对比度都 ≥ 4.5。
+  const C_COLD = [106, 155, 204], C_OK = [143, 191, 106], C_WARM = [240, 194, 75], C_HOT = [229, 72, 60];
   const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
   function tireColor(c) {
     let rgb;
@@ -203,6 +206,7 @@
     let msg;
     try { msg = JSON.parse(text); } catch (_) { return; }
     if (msg.status) status = msg.status;
+    if (Array.isArray(msg.invalidated_summary_ids)) dropSummaries(msg.invalidated_summary_ids);
     if (msg.last_summary) onSummary(msg.last_summary, msg.t);
     if (msg.type === "frame" && msg.frame) {
       latest = msg;
@@ -370,17 +374,17 @@
     for (let g = 0.5; g <= G_RANGE + 1e-6; g += 0.5) {
       ctx.beginPath();
       ctx.arc(c, c, g * k, 0, Math.PI * 2);
-      ctx.strokeStyle = g === 1 ? "#4a5260" : "#2a2f37";
+      ctx.strokeStyle = g === 1 ? "#55554f" : "#3d3d39";
       ctx.lineWidth = g === 1 ? 1.5 : 1;
       ctx.stroke();
     }
     ctx.beginPath();
     ctx.moveTo(c - R, c); ctx.lineTo(c + R, c);
     ctx.moveTo(c, c - R); ctx.lineTo(c, c + R);
-    ctx.strokeStyle = "#2a2f37"; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = "#3d3d39"; ctx.lineWidth = 1; ctx.stroke();
     const fs = Math.max(9, Math.round(s * 0.075));
     ctx.font = `${fs}px system-ui, sans-serif`;
-    ctx.fillStyle = "#6b7280";
+    ctx.fillStyle = "#a3a197";
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
     ctx.fillText("加速", c, 3);
@@ -404,7 +408,7 @@
       const a = (gTrail[i][0] - cutoff) / (G_TRAIL_S * 1000);
       const [x0, y0] = pt(gTrail[i - 1][1], gTrail[i - 1][2]);
       const [x1, y1] = pt(gTrail[i][1], gTrail[i][2]);
-      ctx.strokeStyle = `rgba(78,161,255,${(a * 0.8).toFixed(2)})`;
+      ctx.strokeStyle = `rgba(217,119,87,${(a * 0.8).toFixed(2)})`;
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
     }
     // 当前点 + 数值
@@ -412,10 +416,10 @@
       const [x, y] = pt(f.g_lat, f.g_long);
       ctx.beginPath();
       ctx.arc(x, y, Math.max(4, s * 0.045), 0, Math.PI * 2);
-      ctx.fillStyle = "#e8eaed";
+      ctx.fillStyle = "#faf9f5";
       ctx.fill();
       const tot = Math.hypot(f.g_lat, f.g_long);
-      ctx.fillStyle = "#c8ccd2";
+      ctx.fillStyle = "#d6d4cb";
       ctx.textAlign = "left"; ctx.textBaseline = "top";
       ctx.font = `600 ${Math.round(fs * 1.15)}px ui-monospace, Consolas, monospace`;
       ctx.fillText(tot.toFixed(2), 2, 2);
@@ -844,7 +848,7 @@
       : "没开内存缓冲";
     setHTML(E.recState, rec.recording
       ? `<b class="bad">● 录制中</b> ${fmtInt(rec.packets)} 个包<br><span class="path mono">${esc(rec.path)}</span>`
-      : `没在录制 · ${esc(buf)}`);
+      : (rec.error ? `<b class="bad">${esc(rec.error)}</b><br>` : "") + `没在录制 · ${esc(buf)}`);   // 写失败自动停录时说清楚原因
     const why = rec.snapshot_disabled;
     E.btnSnap.disabled = !!why || !(rec.buffer_packets > 0);
     for (const b of document.querySelectorAll("#set-snap button")) {
@@ -905,6 +909,15 @@
     if (i >= 0) summaries[i] = s; else summaries.push(s);
     summaries.sort((a, b) => b.id - a.id);
     summaries.length = Math.min(summaries.length, SUMMARY_KEEP);
+  }
+  // 服务端说这些小结作废了（那圈被倒带跨回去、成绩不算了）：从列表里删掉，正在显示的卡片收起
+  function dropSummaries(ids) {
+    if (!ids.length) return;
+    const gone = new Set(ids);
+    const before = summaries.length;
+    for (let i = summaries.length - 1; i >= 0; i--) if (gone.has(summaries[i].id)) summaries.splice(i, 1);
+    if (cardId !== null && gone.has(cardId)) hideCard();
+    if (summaries.length !== before && !E.menu.hidden) renderSummaryList();
   }
   function onSummary(s, serverT) {
     if (!s || s.id === lastSummaryId) return;

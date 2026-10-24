@@ -14,10 +14,10 @@ import math
 import sqlite3
 import statistics
 import threading
-from datetime import datetime
 from pathlib import Path
 
 from .lapdata import LapData
+from .util import now_iso, parse_flags
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cars (
@@ -103,9 +103,6 @@ TRACK_FIRST_LAP_MAX_EXTRA = 0.15   # 站立起步的第一圈最多比飞驰圈�
 CIRCUIT_REF_RECENT = 20       # 赛道参考圈长取最近这么多圈飞驰圈的中位数
 
 
-def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
 
 class Store:
     def __init__(self, path: str | Path):
@@ -170,7 +167,7 @@ class Store:
                ON CONFLICT(game, car_ordinal) DO UPDATE SET
                  car_class=excluded.car_class, car_pi=excluded.car_pi,
                  drivetrain=excluded.drivetrain, num_cylinders=excluded.num_cylinders""",
-            (game, car_ordinal, car_class, car_pi, drivetrain, num_cylinders, _now()),
+            (game, car_ordinal, car_class, car_pi, drivetrain, num_cylinders, now_iso()),
         )
 
     def set_car_name(self, game: str, car_ordinal: int, name: str) -> None:
@@ -256,7 +253,7 @@ class Store:
                                       provisional_length_m, created_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (family, game, track_ordinal, kind, default_name, start_x, start_z, ref,
-                 length_m if provisional else None, _now()),
+                 length_m if provisional else None, now_iso()),
             )
 
     def update_track_length(self, track_id: int, length_m: float) -> None:
@@ -268,15 +265,26 @@ class Store:
         """直接改参考圈长（可变长也可变短）。"""
         self._x("UPDATE tracks SET ref_length_m = ? WHERE id=?", (length_m, track_id))
 
-    def refresh_circuit_length(self, track_id: int, recent: int = CIRCUIT_REF_RECENT) -> float | None:
+    def refresh_circuit_length(self, track_id: int, recent: int = CIRCUIT_REF_RECENT, *,
+                               clear_if_empty: bool = False) -> float | None:
         """赛道赛的参考圈长 = 最近 recent 圈完整飞驰圈（排除站立起步的第一圈）距离的中位数。
 
-        返回新的参考圈长；还没有飞驰圈时不动，返回 None。
+        返回新的参考圈长；没有飞驰圈时返回 None，参考圈长：
+        - clear_if_empty=False（默认，存新圈时用）：不动。
+        - clear_if_empty=True（删圈 / 标为不完整 / 倒带作废之后用）：清空。原来定参考圈长的那些圈已经不算数了，
+          留着旧值会让后面的圈拿一个已经不存在的圈长去匹配赛道。清空后按暂定圈长（或不看圈长）匹配，
+          等下一圈飞驰圈存进来再重新定。
         """
-        rows = self._q("SELECT distance_m, flags FROM laps WHERE track_id=? AND kind='lap' AND is_complete=1 "
-                       "AND distance_m > 0 ORDER BY id DESC LIMIT ?", (track_id, recent * 3))
-        dists = [r["distance_m"] for r in rows if "first_lap" not in json.loads(r["flags"] or "[]")][:recent]
+        # 先在 SQL 里排除起步圈再 LIMIT：要是先取最近 N 行再过滤，最近全是起步圈（反复单圈重开）时
+        # 会一圈都剩不下，误以为没有飞驰圈（clear_if_empty 时还会把有效的参考圈长清掉）。
+        # flags 存的是 JSON 数组文本（如 ["first_lap", "rewind"]），按带引号的整词匹配。
+        rows = self._q("SELECT distance_m FROM laps WHERE track_id=? AND kind='lap' AND is_complete=1 "
+                       "AND distance_m > 0 AND COALESCE(flags, '') NOT LIKE '%\"first_lap\"%' "
+                       "ORDER BY id DESC LIMIT ?", (track_id, recent))
+        dists = [r["distance_m"] for r in rows]
         if not dists:
+            if clear_if_empty:
+                self.set_track_length(track_id, None)
             return None
         ref = round(float(statistics.median(dists)), 1)
         self.set_track_length(track_id, ref)
@@ -300,7 +308,7 @@ class Store:
                        track_id: int | None) -> int:
         return self._x(
             "INSERT INTO sessions (started_at, game, fmt, source, car_ordinal, track_id) VALUES (?,?,?,?,?,?)",
-            (_now(), game, fmt, source, car_ordinal, track_id),
+            (now_iso(), game, fmt, source, car_ordinal, track_id),
         )
 
     def list_sessions(self, limit: int = 100) -> list[dict]:
@@ -316,7 +324,7 @@ class Store:
             f"""INSERT INTO laps ({', '.join(_LAP_COLUMNS)}, flags, meta, note, sample_count, created_at, samples)
                 VALUES ({', '.join('?' * len(_LAP_COLUMNS))}, ?, ?, ?, ?, ?, ?)""",
             (*cols.values(), json.dumps(m.get("flags", []), ensure_ascii=False),
-             json.dumps(extra, ensure_ascii=False), m.get("note"), len(lap), m.get("created_at") or _now(),
+             json.dumps(extra, ensure_ascii=False), m.get("note"), len(lap), m.get("created_at") or now_iso(),
              lap.to_blob()),
         )
         lap.meta["id"] = lap_id
@@ -326,7 +334,7 @@ class Store:
     def _row_meta(r: sqlite3.Row) -> dict:
         d = {k: r[k] for k in r.keys() if k not in ("samples", "meta", "flags")}
         d.update(json.loads(r["meta"] or "{}"))
-        d["flags"] = json.loads(r["flags"] or "[]")
+        d["flags"] = parse_flags(r["flags"])
         d["is_complete"] = bool(r["is_complete"])
         return d
 
@@ -378,11 +386,27 @@ class Store:
         rows = self._q(sql + " ORDER BY lap_time ASC LIMIT 1", args)
         return self.get_lap_meta(rows[0]["id"]) if rows else None
 
-    def update_lap(self, lap_id: int, *, note: str | None = None, is_complete: bool | None = None) -> None:
+    def default_reference(self, lap_meta: dict) -> dict | None:
+        """一圈的默认参考圈：同赛道、同车、同游戏里最快的完整圈。
+
+        排除 lap_meta 自己——它本身就是最快的话，参考圈就是第二快。
+        对比页（只选了一圈时）和实时面板的“本圈小结”都用它，两边选出来的参考圈保证一样。
+        """
+        if lap_meta.get("track_id") is None:
+            return None
+        laps = self.list_laps(track_id=lap_meta["track_id"], car_ordinal=lap_meta.get("car_ordinal"),
+                              game=lap_meta.get("game"), complete_only=True, limit=5000)
+        laps = [l for l in laps if l["id"] != lap_meta.get("id") and l.get("lap_time")]
+        return min(laps, key=lambda l: l["lap_time"]) if laps else None
+
+    def update_lap(self, lap_id: int, *, note: str | None = None, is_complete: bool | None = None,
+                   flags: list[str] | None = None) -> None:
         if note is not None:
             self._x("UPDATE laps SET note=? WHERE id=?", (note, lap_id))
         if is_complete is not None:
             self._x("UPDATE laps SET is_complete=? WHERE id=?", (1 if is_complete else 0, lap_id))
+        if flags is not None:
+            self._x("UPDATE laps SET flags=? WHERE id=?", (json.dumps(flags, ensure_ascii=False), lap_id))
 
     def delete_lap(self, lap_id: int) -> None:
         self._x("DELETE FROM laps WHERE id=?", (lap_id,))

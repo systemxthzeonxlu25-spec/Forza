@@ -23,9 +23,7 @@
     if (text !== undefined && text !== null) e.textContent = text;
     return e;
   }
-  function cssVar(name) {
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  }
+  const cssVar = window.Forza.cssVar;      // 读 CSS 变量（见 common.js）
   function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
   function lsSet(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (_) { /* 隐私模式等 */ } }
   const num = (x, d = 2) => (x === null || x === undefined || !isFinite(x) ? "--" : Number(x).toFixed(d));
@@ -702,7 +700,7 @@
       ctx.strokeStyle = col.bg;                            // 2px 底色描边，重叠时分得清
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.fillStyle = "#0d0f12";
+      ctx.fillStyle = cssVar("--on-accent");
       ctx.font = "bold 11px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
