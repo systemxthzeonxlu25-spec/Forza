@@ -29,7 +29,10 @@ from .corners import (
     detect_corners,
     resample_by_distance,
 )
+from .corners import smooth as _smooth
 from .lapdata import LapData
+from .util import jsonable
+from .util import round_or_none as _r
 
 # ---------------------------------------------------------------- 分段
 PRE_BRAKE_MARGIN_M = 10.0     # 段起点放在（两圈里更早的）刹车点之前这么多米
@@ -901,20 +904,6 @@ def _curve_dict(rs: dict) -> dict:
     return out
 
 
-def _smooth(a: np.ndarray, n: int) -> np.ndarray:
-    """滑动平均，两端用边缘值填充。"""
-    if n <= 1 or len(a) < n:
-        return a
-    pad = n // 2
-    return np.convolve(np.pad(a, (pad, n - 1 - pad), mode="edge"), np.ones(n) / n, mode="valid")
-
-
-def _r(x, nd: int):
-    """四舍五入成普通 float；NaN / inf → None。"""
-    x = float(x)
-    return round(x, nd) if math.isfinite(x) else None
-
-
 def _num(x):
     return x if isinstance(x, (int, float)) and math.isfinite(x) else None
 
@@ -929,16 +918,3 @@ def _clean(a: np.ndarray, nd: int) -> list:
     if fin.all():
         return r.tolist()
     return [v if f else None for v, f in zip(r.tolist(), fin.tolist())]
-
-
-def jsonable(v):
-    """元数据里的值转成 JSON 安全的（NaN → None，numpy 标量 → Python 标量）。"""
-    if isinstance(v, (np.generic,)):
-        v = v.item()
-    if isinstance(v, float) and not math.isfinite(v):
-        return None
-    if isinstance(v, (list, tuple)):
-        return [jsonable(x) for x in v]
-    if isinstance(v, dict):
-        return {k: jsonable(x) for k, x in v.items()}
-    return v

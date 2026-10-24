@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import math
 import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import Annotated, Literal
+
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+
+from .profiles import PROFILES
 
 log = logging.getLogger(__name__)
 
@@ -49,65 +53,65 @@ class ConfigError(ValueError):
     """配置写得不对。message 是给用户看的中文提示（指出是哪一项、该怎么改）。"""
 
 
+# ---- 各项的类型和取值范围：写在字段的类型注解里，由 pydantic 统一检查（见 Config.validate）
+Port = Annotated[int, Field(ge=0, le=65535)]                      # 0 = 让系统随便挑一个空闲端口（测试用）
+PositiveNumber = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+NonNegativeNumber = Annotated[float, Field(ge=0, allow_inf_nan=False)]   # TOML 允许写 inf / nan，这里拒绝
+GameKey = Literal[tuple(PROFILES)]                                # fm7 / fm2023 / fh4 / fh5 / fh6 / fm / fh
+TireUnit = Literal["F", "C", "f", "c"]
+
+# 校验不通过时给用户看的中文要求（pydantic 自己的报错是英文）
+_FIELD_HINTS = {
+    "udp_host": "要是字符串（IP 地址）", "http_host": "要是字符串（IP 地址）",
+    "udp_port": "要是 0~65535 的整数", "http_port": "要是 0~65535 的整数",
+    "db_path": "要是字符串（文件路径）", "rec_dir": "要是字符串（文件夹路径）",
+    "game": f"只能是 {' / '.join(PROFILES)} 之一（或者不写）",
+    "tire_temp_unit": '只能是 "F" 或 "C"',
+    "live_hz": "要是 > 0 的数字", "record_buffer_minutes": "要是 ≥ 0 的数字（0 = 关闭）",
+    "forward": '要是字符串列表，例如 ["127.0.0.1:20777"]',
+}
+
+
 @dataclass
 class Config:
+    # strict：不做类型转换（"5555" 不会被悄悄转成 5555、true 不会被当成 1），写错类型直接报错；
+    # revalidate_instances：validate() 传进去的是 Config 实例本身，要求每次都把各字段重新检查一遍
+    __pydantic_config__ = ConfigDict(strict=True, revalidate_instances="always")
+
     udp_host: str = "0.0.0.0"
     # 默认 5555：FH6 官方文档要求避开 5200~5300（游戏自己占用），5555 对所有游戏都安全
-    udp_port: int = 5555
+    udp_port: Port = 5555
     http_host: str = "0.0.0.0"   # 0.0.0.0 才能让局域网里的手机访问
-    http_port: int = 8000
+    http_port: Port = 8000
     db_path: str = "data/forza.db"
     rec_dir: str = "recordings"
-    game: str | None = None      # 强制指定游戏：fm7 / fm2023 / fh4 / fh5 / fh6
-    tire_temp_unit: str = "F"    # 游戏发来的胎温单位，社区共识是 °F
-    live_hz: float = 20.0        # 实时面板推送频率（手机上 20Hz 足够流畅）
+    game: GameKey | None = None  # 强制指定游戏：fm7 / fm2023 / fh4 / fh5 / fh6
+    tire_temp_unit: TireUnit = "F"   # 游戏发来的胎温单位，社区共识是 °F
+    live_hz: PositiveNumber = 20.0   # 实时面板推送频率（手机上 20Hz 足够流畅）
     forward: list[str] | None = None  # 原样转发原始包到其他程序，如 ["127.0.0.1:20777"]
     # 内存里常驻保留最近几分钟的原始包，实时面板菜单里可以“保存刚才 N 分钟”（0 = 关闭）。
     # 每分钟大约占 1.2 MB（FM 60 包/秒）~ 2.8 MB（FH 高帧率约 140 包/秒）
-    record_buffer_minutes: float = 10.0
+    record_buffer_minutes: NonNegativeNumber = 10.0
 
     def validate(self) -> None:
         """检查各项的类型和取值范围，不对就抛 ConfigError。
 
         config.toml 里写错类型（例如 udp_port = "5555" 写成了字符串）时，
         与其等到监听端口时才报一句看不懂的英文错误，不如启动时就指出是哪一项。
+        类型 / 范围按上面字段注解由 pydantic 检查（只校验，不改值）；转发目标另外检查。
         """
-        from .profiles import PROFILES
-
-        def port(name: str) -> None:
-            v = getattr(self, name)
-            if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 65535:
-                raise ConfigError(f"{name} 要是 0~65535 的整数，现在是 {v!r}")
-
-        def number(name: str, lo: float, allow_eq: bool = True) -> None:
-            v = getattr(self, name)
-            # TOML 允许写 inf / nan：要求是有限数（无限长的缓冲区会让状态接口序列化 JSON 时出错）
-            ok = (isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
-                  and (v >= lo if allow_eq else v > lo))
-            if not ok:
-                cmp = "≥" if allow_eq else ">"
-                raise ConfigError(f"{name} 要是 {cmp} {lo:g} 的数字，现在是 {v!r}")
-
-        for name in ("udp_host", "http_host", "db_path", "rec_dir"):
-            if not isinstance(getattr(self, name), str):
-                raise ConfigError(f"{name} 要是字符串，现在是 {getattr(self, name)!r}")
-        port("udp_port")
-        port("http_port")
-        number("live_hz", 0, allow_eq=False)
-        number("record_buffer_minutes", 0)
-        if str(self.tire_temp_unit).upper() not in ("F", "C"):
-            raise ConfigError(f'tire_temp_unit 只能是 "F" 或 "C"，现在是 {self.tire_temp_unit!r}')
-        # 先确认是字符串：TOML 里写成 game = ["fh6"] 时列表不能拿去查字典（会抛 TypeError 而不是给出中文提示）
-        if self.game is not None and (not isinstance(self.game, str) or self.game not in PROFILES):
-            raise ConfigError(f"game 不认识：{self.game!r}，可选：{', '.join(PROFILES)}")
+        try:
+            _ADAPTER.validate_python(self)
+        except ValidationError as e:
+            loc = e.errors()[0]["loc"]
+            name = str(loc[0]) if loc else "config"
+            raise ConfigError(f"{name} {_FIELD_HINTS.get(name, '写得不对')}，现在是 {getattr(self, name, None)!r}") from None
         self._validate_forward()
 
     def _validate_forward(self) -> None:
         """forward 每一项都要是 "主机:端口"，而且不能转回本程序自己监听的 UDP 端口。"""
-        if self.forward is None:
+        if self.forward is None:      # 是不是字符串列表已经由字段注解检查过了
             return
-        if not isinstance(self.forward, list):
-            raise ConfigError(f'forward 要是列表，例如 ["127.0.0.1:20777"]，现在是 {self.forward!r}')
         self_hosts = set(_SELF_HOSTS) | {str(self.udp_host).lower()}
         try:
             from .netinfo import lan_ips
@@ -128,6 +132,9 @@ class Config:
     def resolve(self, p: str) -> Path:
         path = Path(p)
         return path if path.is_absolute() else ROOT / path
+
+
+_ADAPTER = TypeAdapter(Config)
 
 
 def load_config(path: Path | None = None) -> Config:

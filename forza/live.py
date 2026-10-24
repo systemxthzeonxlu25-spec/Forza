@@ -129,7 +129,7 @@ import numpy as np
 from fastapi import WebSocket
 
 from .frame import Frame
-from .lapdata import LapData
+from .lapdata import LapData, increasing_index
 from .laps import should_use_integrated_distance
 from .netinfo import lan_ips
 from .packet import FORMATS
@@ -240,9 +240,9 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
 def _ref_arrays(lap: LapData) -> tuple[np.ndarray, np.ndarray, bool]:
     """存档圈的 (距离, 时间, 是否速度积分距离)，距离做成单调的（np.interp 要求）。"""
     integrated = lap_has_flag(lap.meta, "dist_integrated")
-    rd = np.maximum.accumulate(np.asarray(lap.ch["dist"], dtype=np.float64))
-    rt_ = np.asarray(lap.ch["t"], dtype=np.float64)
-    return rd, rt_, integrated
+    idx = increasing_index(lap.ch["dist"])
+    return (np.asarray(lap.ch["dist"], dtype=np.float64)[idx], np.asarray(lap.ch["t"], dtype=np.float64)[idx],
+            integrated)
 
 
 # ====================================================================== 本圈小结
@@ -633,9 +633,7 @@ class LiveBroadcaster:
         c = self._ref_cache
         if c is None or c[0] != key:
             if kind == "best":
-                integrated = lap_has_flag(obj.meta, "dist_integrated")
-                rd = np.asarray(obj.ch["dist"], dtype=np.float64)
-                rt_ = np.asarray(obj.ch["t"], dtype=np.float64)
+                rd, rt_, integrated = _ref_arrays(obj)
             else:
                 rt_ = np.asarray([r[0] for r in obj.rows], dtype=np.float64)
                 d_field = np.asarray([r[1] for r in obj.rows], dtype=np.float64)
@@ -643,7 +641,8 @@ class LiveBroadcaster:
                 # 和切圈器存圈时用同一个判断，保证挂起圈落盘前后距离口径不变
                 integrated = should_use_integrated_distance(d_field, d_int)
                 rd = d_int if integrated else d_field
-            rd = np.maximum.accumulate(rd)   # np.interp 要求 x 单调
+                idx = increasing_index(rd)       # np.interp 要求横轴严格递增
+                rd, rt_ = rd[idx], rt_[idx]
             c = self._ref_cache = (key, rd, rt_, integrated)
         return lap_time, c[1], c[2], c[3]
 

@@ -24,7 +24,8 @@ import math
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..analysis import EXTRA_CHANNELS, jsonable
+from ..analysis import EXTRA_CHANNELS
+from ..util import jsonable
 from ..analysis import compare as compare_laps
 
 log = logging.getLogger(__name__)

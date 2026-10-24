@@ -29,6 +29,7 @@ import numpy as np
 
 from ..frame import Frame, G
 from ..packet import FORMATS, encode
+from ..util import jsonable
 from ..profiles import DEFAULT_GAME_BY_FORMAT
 from ..recorder import write_recording
 from .track import Corner, Track, build_circuit, build_sprint_route
@@ -1248,7 +1249,7 @@ def generate(scenario: str = "circuit", *, family: str = "fm", laps: int = 5, hz
         raise ValueError(f"未知场景 {scenario!r}（可选 circuit / sprint / freeroam）")
     if not issues:
         truth["issues"] = {}
-    return FakeResult(records=records, truth=_jsonable(truth))
+    return FakeResult(records=records, truth=jsonable(truth))
 
 
 def truth_path_for(path) -> Path:
@@ -1294,20 +1295,3 @@ def write_fake_recording(path, fmt_key: str = "fm2023_dash", scenario: str = "ci
                   "file": path.name})
     tpath.write_text(json.dumps(truth, ensure_ascii=False, indent=1), encoding="utf-8")
     return truth
-
-
-def _jsonable(x):
-    """把 numpy 类型转成普通 Python 类型，保证 truth 能直接 json.dump。"""
-    if isinstance(x, dict):
-        return {str(k): _jsonable(v) for k, v in x.items()}
-    if isinstance(x, (list, tuple)):
-        return [_jsonable(v) for v in x]
-    if isinstance(x, np.ndarray):
-        return [_jsonable(v) for v in x.tolist()]
-    if isinstance(x, np.integer):
-        return int(x)
-    if isinstance(x, np.floating):
-        return float(x)
-    if isinstance(x, np.bool_):
-        return bool(x)
-    return x

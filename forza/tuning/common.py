@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 
 import numpy as np
 
@@ -134,24 +133,6 @@ def _confidence(rules: dict, total_s: float, min_s: float, margin: float) -> str
     if total_s >= min_s * c["medium_factor"] or margin >= c["margin"]:
         return "medium"
     return "low"
-
-
-def _json_safe(x):
-    """递归转成普通 Python 类型；NaN / inf → None。"""
-    if isinstance(x, dict):
-        return {str(k): _json_safe(v) for k, v in x.items()}
-    if isinstance(x, (list, tuple)):
-        return [_json_safe(v) for v in x]
-    if isinstance(x, (np.bool_, bool)):
-        return bool(x)
-    if isinstance(x, (np.integer, int)):
-        return int(x)
-    if isinstance(x, (np.floating, float)):
-        f = float(x)
-        return f if math.isfinite(f) else None
-    if isinstance(x, np.ndarray):
-        return _json_safe(x.tolist())
-    return x
 
 
 def _finding(fid: str, category: str, severity: str, title: str, summary: str, evidence: list[str],

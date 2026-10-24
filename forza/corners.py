@@ -14,7 +14,7 @@ import math
 
 import numpy as np
 
-from .lapdata import LapData
+from .lapdata import LapData, increasing_index
 
 CORNER_MAX_RADIUS_M = 300.0   # 半径小于这个算弯
 MIN_CORNER_LEN_M = 10.0       # 太短的不算
@@ -32,11 +32,9 @@ def resample_by_distance(lap: LapData, step: float = 1.0, channels: list[str] | 
 
     length 给定时网格覆盖 [0, length]（超出这圈实际距离的部分用末尾值填）。
     """
-    d = lap["dist"]
-    # 距离必须单调递增才能插值：去掉倒退/重复的点
-    keep = np.concatenate([[True], np.diff(d) > 1e-6]) if len(d) > 1 else np.ones(len(d), bool)
-    d = np.maximum.accumulate(d[keep])
-    keep_idx = np.nonzero(keep)[0]
+    # 距离必须严格递增才能插值：去掉倒退 / 重复的点
+    keep_idx = increasing_index(lap["dist"])
+    d = lap["dist"][keep_idx]
     end = length if length is not None else (float(d[-1]) if len(d) else 0.0)
     grid = np.arange(0.0, max(end, step) + 1e-9, step)
     out = {"dist": grid}
@@ -47,8 +45,9 @@ def resample_by_distance(lap: LapData, step: float = 1.0, channels: list[str] | 
     return out
 
 
-def _smooth(a: np.ndarray, n: int) -> np.ndarray:
-    """滑动平均。两端用边缘值填充（直接补 0 会把圈首圈尾的坐标拉偏，凭空多出假弯）。"""
+def smooth(a: np.ndarray, n: int) -> np.ndarray:
+    """滑动平均（窗口 n 个点）。两端用边缘值填充：直接补 0 会把圈首圈尾的坐标拉偏，凭空多出假弯。
+    analysis（丢时间速率着色）也用这一个。"""
     if n <= 1 or len(a) < n:
         return a
     k = np.ones(n) / n
@@ -61,12 +60,12 @@ def curvature(rs: dict[str, np.ndarray]) -> np.ndarray:
     x, z = rs["pos_x"], rs["pos_z"]
     if np.ptp(x) + np.ptp(z) < 1.0 and "yaw_rate" in rs:
         # 没有坐标（比如全 0）：退回用 偏航角速度 / 车速
-        return _smooth(rs["yaw_rate"] / np.maximum(rs["speed"], 5.0), SMOOTH_M)
-    xs, zs = _smooth(x, 5), _smooth(z, 5)
+        return smooth(rs["yaw_rate"] / np.maximum(rs["speed"], 5.0), SMOOTH_M)
+    xs, zs = smooth(x, 5), smooth(z, 5)
     heading = np.unwrap(np.arctan2(np.gradient(xs), np.gradient(zs)))
     step = float(rs["dist"][1] - rs["dist"][0]) if len(rs["dist"]) > 1 else 1.0
     k = np.gradient(heading) / step
-    return _smooth(k, SMOOTH_M)
+    return smooth(k, SMOOTH_M)
 
 
 def detect_corners(lap: LapData, step: float = 1.0) -> list[dict]:

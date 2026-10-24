@@ -9,7 +9,7 @@
 
   // ------------------------------------------------------------------ 小工具
   const $ = (sel, root = document) => root.querySelector(sel);
-  const { esc, cssVar } = F;      // 公用的 HTML 转义 / 读 CSS 变量（见 common.js）
+  const { esc, cssVar, getJSON } = F;   // 公用的 HTML 转义 / 读 CSS 变量 / 不抛异常的请求（见 common.js）
   const COL = {
     a: cssVar("--accent", "#4ea1ff"),
     b: cssVar("--accent-2", "#ff9f43"),
@@ -31,16 +31,6 @@
       localStorage.setItem(key, JSON.stringify(val));
     } catch (_) { /* 隐私模式等：不记也行 */ }
     return null;
-  }
-  async function getJSON(path, opts) {
-    try {
-      const r = await fetch(path, opts);
-      let data = null;
-      try { data = await r.json(); } catch (_) { /* 不是 JSON */ }
-      return { ok: r.ok, status: r.status, data };
-    } catch (_) {
-      return { ok: false, status: 0, data: null };
-    }
   }
   const detail = (r) => (r.data && typeof r.data.detail === "string" ? r.data.detail
     : r.status ? `出错了（${r.status}）` : "服务未连接");

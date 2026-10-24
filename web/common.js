@@ -47,6 +47,19 @@
     return names[cls] ?? String(cls);
   }
 
+  // 和 api() 一样发请求，但从不抛异常：返回 {ok, status, data}（连不上服务时 status = 0）。
+  // 实时面板、车辆页这种要自己按状态码显示提示的地方用它。
+  async function getJSON(path, opts) {
+    try {
+      const r = await fetch(path, opts);
+      let data = null;
+      try { data = await r.json(); } catch (_) { /* 不是 JSON */ }
+      return { ok: r.ok, status: r.status, data };
+    } catch (_) {
+      return { ok: false, status: 0, data: null };
+    }
+  }
+
   async function api(path, opts = {}) {
     const init = { ...opts };
     if (init.body && typeof init.body !== "string") {
@@ -207,5 +220,5 @@
     return new URLSearchParams(location.search).get(name);
   }
 
-  window.Forza = { fmtLap, fmtDelta, carClass, DRIVETRAIN, api, esc, cssVar, nav, qs, onLapsChanged, watchStatus, checkLapsChanged };
+  window.Forza = { fmtLap, fmtDelta, carClass, DRIVETRAIN, api, getJSON, esc, cssVar, nav, qs, onLapsChanged, watchStatus, checkLapsChanged };
 })();

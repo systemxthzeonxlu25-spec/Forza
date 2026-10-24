@@ -126,6 +126,7 @@
   const num = (x) => typeof x === "number" && isFinite(x);
   const signed = (x, d = 2) => (num(x) ? (x < 0 ? "−" : "") + Math.abs(x).toFixed(d) : "--");
   const esc = Forza.esc;      // 公用的 HTML 转义（见 common.js）
+  const getJSON = Forza.getJSON;  // 不抛异常的请求（见 common.js）
 
   // ======================= 颜色 =======================
   // 胎温 → 颜色：冷蓝 → 理想绿 → 偏热黄 → 过热红。
@@ -735,16 +736,6 @@
   // 车（游戏 / ordinal / PI）变了立刻拉一次，之后每 60 秒拉一次。接口不存在或出错时退回默认、隐藏相关界面。
   let carKey = "", carInfoTimer = null;
   const setupInfo = { available: false, setup: null };
-  async function getJSON(path, opts) {
-    try {
-      const r = await fetch(path, opts);
-      let data = null;
-      try { data = await r.json(); } catch (_) { /* 不是 JSON */ }
-      return { ok: r.ok, status: r.status, data };
-    } catch (_) {
-      return { ok: false, status: 0, data: null };
-    }
-  }
   function watchCar(f) {
     const c = f.car || {};
     if (!c.ordinal) return;
