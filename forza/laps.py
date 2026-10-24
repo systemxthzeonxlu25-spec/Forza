@@ -584,7 +584,7 @@ class LapSaver:
         - 冲刺赛：连起点都是中途的某个位置，认不出是哪条路线，同样不归（同一场后面不会再有别的圈，也就不补）。
         有赛道 ID（FM2023）的游戏不受影响：按 ID 认，和长度无关。
         """
-        if partial and not m.get("track_ordinal"):
+        if partial and m.get("track_ordinal") is None:
             return None
         return self.store.find_or_create_track(
             family=m["family"], game=m["game"], kind=kind, track_ordinal=m.get("track_ordinal"),

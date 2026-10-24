@@ -185,7 +185,7 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
                     guess=False 返回 None（中途接入、还没跑完一圈飞驰圈时用：宁可先不显示 PB，也不拿错的布局比）
       冲刺赛只看起点，多个候选取最近的。
     """
-    if track_ordinal:
+    if track_ordinal is not None:        # 0 也是有效的赛道 ID（见 storage.find_track）
         rows = store.query("SELECT id FROM tracks WHERE family=? AND track_ordinal=? AND kind=? ORDER BY id",
                            (family, track_ordinal, kind))
         return rows[0]["id"] if rows else None
@@ -655,7 +655,7 @@ class LiveBroadcaster:
         q = {"family": ev.family, "game": ev.game, "car_ordinal": ev.car_ordinal,
              "car_pi": int(fr.car_pi or 0), "track_ordinal": None, "x": None, "z": None,
              "length_m": None, "length_tol": None, "guess": True}
-        if fr.track_ordinal:                      # FM2023：一开始就知道是哪条赛道
+        if fr.track_ordinal is not None:          # FM2023：一开始就知道是哪条赛道（ID 0 也有效）
             q.update(kind="circuit", track_ordinal=int(fr.track_ordinal))
             tkey = ("ord", int(fr.track_ordinal))
         elif st_kind == "sprint?":                # 冲刺赛：按起点
@@ -689,7 +689,7 @@ class LiveBroadcaster:
         """历史最快参照的差距。查库在后台线程里做，这里只读缓存（O(1)）。"""
         found = self._pb_query(det, fr, st_kind)
         if found is None:
-            if st_kind == "circuit" or st_kind == "sprint?" or fr.track_ordinal:
+            if st_kind == "circuit" or st_kind == "sprint?" or fr.track_ordinal is not None:
                 return {"state": "none", "reason": "还不知道是哪条赛道"}
             return {"state": "none", "reason": "第一次过线后才知道是哪条赛道"}
         key, q = found

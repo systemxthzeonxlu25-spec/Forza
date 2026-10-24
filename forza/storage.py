@@ -16,6 +16,7 @@ import statistics
 import threading
 from pathlib import Path
 
+from . import names
 from .lapdata import LapData
 from .util import now_iso, parse_flags
 
@@ -129,6 +130,24 @@ class Store:
                        SELECT MIN(l.distance_m) FROM laps l
                        WHERE l.track_id = tracks.id AND l.kind = 'lap' AND l.distance_m > 0)
                    WHERE kind = 'circuit' AND ref_length_m IS NULL AND track_ordinal IS NULL""")
+        self._fill_known_names()
+
+    def _fill_known_names(self) -> None:
+        """老库里还是默认名字的车 / 赛道，按内置名字表（forza/names.py）补上真实名字。
+
+        只改“没起过名”的：车 name 为空、赛道名还是自动生成的“赛道 #编号”。用户改过的名字不动。
+        每次打开库都跑一遍（几十行 UPDATE，很快），名字表更新后老数据也能跟上。
+        """
+        for r in self._db.execute("SELECT game, car_ordinal FROM cars WHERE name IS NULL").fetchall():
+            nm = names.car_name(r["game"], r["car_ordinal"])
+            if nm:
+                self._db.execute("UPDATE cars SET name=? WHERE game=? AND car_ordinal=? AND name IS NULL",
+                                 (nm, r["game"], r["car_ordinal"]))
+        for r in self._db.execute("SELECT id, game, track_ordinal, name FROM tracks "
+                                  "WHERE track_ordinal IS NOT NULL").fetchall():
+            nm = names.track_name(r["game"], r["track_ordinal"])
+            if nm and r["name"] == f"赛道 #{r['track_ordinal']}":
+                self._db.execute("UPDATE tracks SET name=? WHERE id=?", (nm, r["id"]))
 
     def close(self) -> None:
         self._db.close()
@@ -162,12 +181,14 @@ class Store:
     def upsert_car(self, game: str, car_ordinal: int, car_class: int, car_pi: int,
                    drivetrain: int, num_cylinders: int) -> None:
         self._x(
-            """INSERT INTO cars (game, car_ordinal, car_class, car_pi, drivetrain, num_cylinders, first_seen)
-               VALUES (?,?,?,?,?,?,?)
+            # 新车的默认名字来自内置名字表（只有 FM2023 有）；已有的车不改名（用户可能在网页上改过）
+            """INSERT INTO cars (game, car_ordinal, name, car_class, car_pi, drivetrain, num_cylinders, first_seen)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(game, car_ordinal) DO UPDATE SET
                  car_class=excluded.car_class, car_pi=excluded.car_pi,
                  drivetrain=excluded.drivetrain, num_cylinders=excluded.num_cylinders""",
-            (game, car_ordinal, car_class, car_pi, drivetrain, num_cylinders, now_iso()),
+            (game, car_ordinal, names.car_name(game, car_ordinal), car_class, car_pi, drivetrain, num_cylinders,
+             now_iso()),
         )
 
     def set_car_name(self, game: str, car_ordinal: int, name: str) -> None:
@@ -202,7 +223,8 @@ class Store:
                    length_m: float | None, first_lap: bool = False) -> int | None:
         """按 find_or_create_track 的规则找已有赛道，找不到返回 None（只查不建）。"""
         with self._lock:
-            if track_ordinal:
+            # 注意用 is not None：FM2023 的赛道 ID 0 是真实赛道（Laguna Seca 全赛道），不能当成“没有 ID”
+            if track_ordinal is not None:
                 rows = self._q("SELECT id FROM tracks WHERE family=? AND track_ordinal=? AND kind=? ORDER BY id",
                                (family, track_ordinal, kind))
                 return rows[0]["id"] if rows else None
@@ -236,7 +258,7 @@ class Store:
         with self._lock:
             tid = self.find_track(family=family, kind=kind, track_ordinal=track_ordinal, start_x=start_x,
                                   start_z=start_z, length_m=length_m, first_lap=first_lap)
-            provisional = kind == "circuit" and first_lap and not track_ordinal and bool(length_m and length_m > 0)
+            provisional = kind == "circuit" and first_lap and track_ordinal is None and bool(length_m and length_m > 0)
             if tid is not None:
                 if provisional:
                     # 暂定圈长取起步圈里最短的（发车位置越靠前越接近真实圈长）
@@ -245,8 +267,8 @@ class Store:
                 return tid
             n = self._q("SELECT COUNT(*) AS c FROM tracks WHERE kind=?", (kind,))[0]["c"] + 1
             default_name = f"{'赛道' if kind == 'circuit' else '冲刺路线'} {n}"
-            if track_ordinal:
-                default_name = f"赛道 #{track_ordinal}"
+            if track_ordinal is not None:     # 有赛道 ID（FM2023）：内置名字表里有就用真实名字
+                default_name = names.track_name(game, track_ordinal) or f"赛道 #{track_ordinal}"
             ref = None if (kind == "circuit" and first_lap) else length_m
             return self._x(
                 """INSERT INTO tracks (family, game, track_ordinal, kind, name, start_x, start_z, ref_length_m,

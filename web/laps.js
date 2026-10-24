@@ -458,6 +458,7 @@
         <td class="c-note">${note}</td>
         <td class="c-act">
           <a href="/tuning.html?lap=${l.id}" title="用这圈的数据做调车诊断">诊断</a>
+          <a href="/api/laps/${l.id}/csv" download title="把这圈的全部通道导出成 CSV（Excel 等工具打开）">导出</a>
           <button class="link" data-act="complete" title="${l.is_complete ? "不让这圈参与最快圈 / 默认对比" : "重新算作完整圈"}">${l.is_complete ? "标为不完整" : "标为完整"}</button>
           <button class="link danger" data-act="delete" title="删除这一圈">删除</button>
         </td>
