@@ -20,6 +20,7 @@
   };
   const GRID = cssVar("--grid", "rgba(255,255,255,0.06)");
   const num = (v) => typeof v === "number" && isFinite(v);
+  const UNTAGGED_ID = 0;          // 版本对比里代表“没记版本的圈”（和 forza/setups.py 的 UNTAGGED_ID 一致）
   const fmtS = (v, d = 3) => (num(v) ? v.toFixed(d) : "--");
   const fmtInt = (v) => (num(v) ? String(Math.round(v)) : "--");
   const fmtDate = (s) => (s ? s.slice(5, 16).replace("T", " ") : "");
@@ -238,24 +239,28 @@
   // ------------------------------------------------------------------ 版本对比
   function renderCompareForm() {
     const list = S.setups;
-    show($("#sec-compare"), list.length >= 2);
-    if (list.length < 2) return;
+    // 只有一个版本也能比：和“没记版本的圈”（第一次记版本之前跑的，id = 0）比，正好是改之前的基线
+    show($("#sec-compare"), list.length >= 1);
+    if (!list.length) return;
     const selA = $("#cmp-a"), selB = $("#cmp-b");
     const prevA = selA.value, prevB = selB.value;
     const opt = (s) => `<option value="${s.id}">${esc(s.name)}（${s.flying_laps} 圈）</option>`;
-    selA.innerHTML = list.map(opt).join("");
-    selB.innerHTML = list.map(opt).join("");
-    // 默认：B = 当前版本（没有就最新的），A = 它前面那个版本
+    const untagged = `<option value="${UNTAGGED_ID}">没记版本的圈（改之前）</option>`;
+    selA.innerHTML = list.map(opt).join("") + untagged;
+    selB.innerHTML = list.map(opt).join("") + untagged;
+    const has = (v) => v === String(UNTAGGED_ID) || list.some((s) => String(s.id) === v);
+    // 默认：B = 当前版本（没有就最新的），A = 它前面那个版本（没有就是没记版本的圈）
     const bDef = list.find((s) => s.is_current) || list[0];
     const aDef = list[list.indexOf(bDef) + 1] || list.find((s) => s !== bDef);
-    selB.value = list.some((s) => String(s.id) === prevB) ? prevB : String(bDef.id);
-    selA.value = list.some((s) => String(s.id) === prevA) ? prevA : String(aDef.id);
+    selB.value = has(prevB) ? prevB : String(bDef.id);
+    selA.value = has(prevA) ? prevA : String(aDef ? aDef.id : UNTAGGED_ID);
     selA.onchange = selB.onchange = renderTrackOptions;
     renderTrackOptions();
   }
 
   function renderTrackOptions() {
     const ids = [Number($("#cmp-a").value), Number($("#cmp-b").value)];
+    const need = ids.filter((id) => id !== UNTAGGED_ID).length;   // 没记版本的圈跑过哪些赛道不知道：只看真实版本那边
     const tracks = new Map();
     for (const s of S.setups.filter((x) => ids.includes(x.id))) {
       for (const t of s.tracks || []) {
@@ -267,7 +272,7 @@
     }
     const sel = $("#cmp-track");
     const prev = sel.value;
-    const common = [...tracks.values()].filter((t) => t.both === 2);
+    const common = [...tracks.values()].filter((t) => t.both === need);
     sel.innerHTML = `<option value="">自动（两个版本都跑过的赛道）</option>` +
       common.map((t) => `<option value="${t.track_id}">${esc(t.track_name || `赛道 #${t.track_id}`)}</option>`).join("");
     if (common.some((t) => String(t.track_id) === prev)) sel.value = prev;
@@ -317,10 +322,32 @@
         <span><i class="hollow"></i>失误圈（不计）</span><span><i class="band"></i>A 中位数 ± 噪音范围：B 的中位数（竖线）落在里面 = 在噪音内</span>
       </div>
       ${(c.notes || []).map((n) => `<p class="hint">${esc(n)}</p>`).join("")}
+      ${sectorsTable(c)}
       ${findingsTable(c)}
       <p class="muted small method">${esc(c.method || "")}</p>
       <p class="tip small">${esc(c.tip || "")}</p>`;
     drawStrip();
+  }
+
+  // 逐弯对比：赛道固定弯道表的每一段（一个弯 + 前后各半段直道），两边中位数用时的差
+  function sectorsTable(c) {
+    const sc = c.sectors;
+    if (!sc || !(sc.sectors || []).length) return "";
+    const v = {
+      faster: (d) => `<span class="chg-fewer">B 快 ${Math.abs(d).toFixed(3)} s</span>`,
+      slower: (d) => `<span class="chg-more">B 慢 ${Math.abs(d).toFixed(3)} s</span>`,
+      noise: (d) => `<span class="muted">${num(d) ? F.fmtDelta(d, 3) : ""}（噪音内）</span>`,
+      few: (d) => `<span class="muted">${num(d) ? F.fmtDelta(d, 3) : "--"}（圈数不够）</span>`,
+    };
+    const rows = sc.sectors.map((s) => `<tr${s.verdict === "faster" || s.verdict === "slower" ? "" : ` class="dim"`}>
+      <td>${esc(s.name)}${s.name !== s.code ? ` <span class="muted">${esc(s.code)}</span>` : ""}</td>
+      <td class="num">${fmtS(s.a_median_s)}</td><td class="num">${fmtS(s.b_median_s)}</td>
+      <td>${(v[s.verdict] || v.few)(s.delta_s)}</td></tr>`).join("");
+    return `<h3>逐弯对比 <span class="muted small">（每段 = 一个弯加前后各半段直道，A ${sc.laps.a} 圈 / B ${sc.laps.b} 圈的中位数）</span></h3>
+      <div class="tbl-wrap"><table>
+      <thead><tr><th>弯</th><th class="num"><span class="tag-a">A</span> 用时</th><th class="num"><span class="tag-b">B</span> 用时</th><th>变化</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <p class="muted small">每段也按两边圈速的波动算噪音范围（和上面整圈一样是 2 × 标准误），超出范围才算真快了 / 慢了。</p>`;
   }
 
   function findingsTable(c) {
@@ -331,8 +358,12 @@
     const cell = (x, n) => `${x.laps_with}/${n}`;
     const tot = (x) => (num(x.total_s) ? `${x.total_s.toFixed(2)} s` : "");
     const chg = { fewer: `<span class="chg-fewer">B 少了</span>`, more: `<span class="chg-more">B 多了</span>`, same: `<span class="muted">一样</span>` };
-    const rows = c.findings_by_id.map((f) => `<tr>
-      <td class="wrap">${esc(f.title)} <span class="muted">${esc(f.category_label || "")}</span></td>
+    // 调车诊断页“照这条改了”记的版本，说明是“针对诊断：<标题> #<诊断项 id>”：按 id 把这一行标出来
+    // （标题里带弯道编号，每圈可能不一样；id 是固定的），一眼看它少没少
+    const m = /^针对诊断：.*#([\w.:-]+)\s*$/.exec(c.b.note || "");
+    const target = m ? m[1] : null;
+    const rows = c.findings_by_id.map((f) => `<tr${f.id === target ? ` class="target"` : ""}>
+      <td class="wrap">${esc(f.title)} <span class="muted">${esc(f.category_label || "")}</span>${f.id === target ? ` <span class="badge-target">这次针对的</span>` : ""}</td>
       <td class="num">${cell(f.a, na)}</td><td class="num">${tot(f.a)}</td>
       <td class="num">${cell(f.b, nb)}</td><td class="num">${tot(f.b)}</td>
       <td>${chg[f.change] || ""}</td></tr>`).join("");

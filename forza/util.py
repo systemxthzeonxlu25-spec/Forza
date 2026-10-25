@@ -4,6 +4,7 @@
     parse_flags(v)         圈的 flags：库里是 JSON 文本，meta 里是列表 / 集合，统一成列表
     lap_has_flag(m, name)  某一圈（meta / 数据库行）有没有这个标记
     is_standing_first_lap  赛道赛站立起步的第一圈（起点和距离零点都和飞驰圈不一样）
+    is_imported_lap(m)     导入 / 回放录像得到的圈（created_at、ended_epoch 是导入那一刻，不是录像当时）
     round_or_none(x, nd)   数值取舍；NaN / inf / 不是数 → None（JSON 里不能出现 NaN）
     jsonable(x)            递归转成能直接 json.dumps 的普通 Python 类型（numpy → Python，NaN / inf → None）
 
@@ -24,6 +25,8 @@ import math
 from datetime import datetime
 
 import numpy as np
+
+IMPORT_SOURCES = ("import:", "replay:")   # 会话来源以这些开头 = 导入 / 回放录像（见 laps.LapSaver）
 
 
 def now_iso() -> str:
@@ -95,3 +98,9 @@ def jsonable(x):
         f = float(x)
         return f if math.isfinite(f) else None
     return x
+
+
+def is_imported_lap(meta: dict) -> bool:
+    """导入 / 回放录像得到的圈：它的 created_at / ended_epoch 是导入那一刻的时间，不能拿来按日期或调校版本归类。
+    看会话来源（storage.list_laps 带出来的 session_source）。"""
+    return str(meta.get("session_source") or "").startswith(IMPORT_SOURCES)

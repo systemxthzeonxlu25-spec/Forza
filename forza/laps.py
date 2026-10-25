@@ -29,7 +29,7 @@ import numpy as np
 
 from .frame import Frame
 from .lapdata import LapData, frame_sample
-from .util import now_iso
+from .util import IMPORT_SOURCES, now_iso
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ MIN_SPRINT_M = 300.0           # 短于这个距离的“冲刺赛”直接丢�
 IDLE_S = 30.0                  # 完全收不到包这么久（游戏关了 / FH6 进菜单停发）就结束当前比赛
 PAUSE_MAX_S = 180.0            # 还在收包、但连续暂停（IsRaceOn = 0）这么久，也结束当前比赛
 PARTIAL_START_S = 1.0          # 开始记录时这圈已经跑了超过这么久 = 中途接入（缺前段数据）
-UNTAGGED_SOURCES = ("import:", "replay:")   # 这些来源（导入 / 回放录像）的圈默认不归调校版本，见 LapSaver
+UNTAGGED_SOURCES = IMPORT_SOURCES           # 这些来源（导入 / 回放录像）的圈默认不归调校版本，见 LapSaver
 
 
 def should_use_integrated_distance(d_field, d_int) -> bool:

@@ -178,6 +178,37 @@ def test_compare_verdicts_standard_error(store):
         su.compare_setups(store, a["id"], a["id"])
 
 
+def test_compare_against_untagged_laps(store):
+    """第一次记版本之前跑的圈（setup_id 为空）可以当“改之前”的基线来比（调车诊断页“照这条改了”之后最常见）。"""
+    _add_laps(store, None, [100.0, 100.2, 99.8, 100.1, 99.9])
+    b = su.create_setup(store, name="前防倾杆调软一点", **CAR)
+    _add_laps(store, b["id"], [99.5, 99.7, 99.3, 99.6, 99.4])
+    r = su.compare_setups(store, su.UNTAGGED_ID, b["id"])
+    assert r["a"]["name"] == su.UNTAGGED_NAME and r["a"]["n"] == 5 and r["b"]["n"] == 5
+    assert r["delta_median_s"] == pytest.approx(-0.5) and r["verdict"] == "faster"
+    assert su.compare_setups(store, b["id"], su.UNTAGGED_ID)["verdict"] == "slower"
+    with pytest.raises(su.SetupError):
+        su.compare_setups(store, su.UNTAGGED_ID, su.UNTAGGED_ID)
+    with pytest.raises(su.SetupError):
+        su.compare_setups(store, su.UNTAGGED_ID, 999)
+
+
+def test_untagged_baseline_only_own_laps_before_first_version(store):
+    """基线只要第一次设版本之前自己跑的圈：导入 / 回放的圈、设过版本之后又没标签的圈都不算。"""
+    t0 = time.time()
+    _add_laps(store, None, [100.0, 100.2, 99.8], ended_epoch=t0 - 100)
+    sid = store.create_session("fm2023", "fm2023_dash", "import:old.frec", 2240, 1)
+    _add_laps(store, None, [90.0, 90.1, 90.2], ended_epoch=t0 - 50, session_id=sid)   # 导入：不知道当时什么调校
+    b = su.create_setup(store, name="B", **CAR)
+    su.activate(store, b["id"], at=t0)
+    _add_laps(store, b["id"], [99.5, 99.7, 99.3], ended_epoch=t0 + 10)
+    _add_laps(store, None, [80.0, 80.1, 80.2], ended_epoch=t0 + 20)                     # 设过版本之后的空标签圈
+    lap = next(l for l in store.list_laps(**CAR) if l.get("session_id") == sid)
+    assert lap["session_source"] == "import:old.frec"
+    r = su.compare_setups(store, su.UNTAGGED_ID, b["id"])
+    assert r["a"]["n"] == 3 and r["a"]["median_time"] == pytest.approx(100.0)
+
+
 def test_upgrade_hints(store):
     a = su.create_setup(store, name="A", car_pi=750, engine_max_rpm=8000.0, num_cylinders=8, **CAR)
     assert su.car_hints(a, {"car_pi": 750, "engine_max_rpm": 8000.0, "num_cylinders": 8}) == []
@@ -248,6 +279,13 @@ def test_api_full_flow(cfg, recs):
             rev = next(f for fid, f in by_id.items() if "rev_limiter" in fid)
             assert rev["a"]["laps_with"] == cmp_["diag_laps"]["a"] and rev["b"]["laps_with"] == 0
             assert rev["a"]["total_s"] > 1.0 and rev["change"] == "fewer"
+            # 逐段对比：每段两边都有中位数，各段 B − A 加起来 ≈ 两边各段中位数之和的差
+            sec = cmp_["sectors"]
+            assert sec and sec["laps"]["a"] >= 3 and sec["laps"]["b"] >= 3 and len(sec["sectors"]) >= 3
+            for row in sec["sectors"]:
+                assert row["a_median_s"] > 0 and row["b_median_s"] > 0 and row["name"]
+                assert row["delta_s"] == pytest.approx(row["b_median_s"] - row["a_median_s"], abs=0.002)
+                assert row["verdict"] in ("faster", "slower", "noise")
 
             # 改名、设为当前、错误码
             assert c.patch(f"/api/setups/{a['id']}", json={"name": "基准"}).json()["name"] == "基准"

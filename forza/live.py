@@ -87,7 +87,10 @@ compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十
       "ref_time": 81.5, "delta": 0.3, "predicted": 81.8,
       "lap_id": 12, "track_id": 3, "car_pi": 800,
       "pi_match": true,          # false = PB 是别的 PI（改装）跑的
-      "source": "db" | "session" # session = 本场刚跑的圈比数据库里的还快
+      "dist": 1234.5 | null,     # 按 PB 那圈对齐的本圈距离 m
+      "brake_ref": null | {"lap_id": 12, "ref_time": 81.5, "dist": 1234.5},  # 刹车点提示的基准：存档里最快的那圈 +
+                                 # 按它对齐的本圈距离（PB 是本场还没存的圈时也给，用上一个存档 PB）
+      "source": "db" | "session" # session = 本场刚跑的圈比数据库里的还快（还没存库，lap_id 为 null）
     },
     "race_time": 300.1, "position": 3
   },
@@ -97,7 +100,8 @@ compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十
     "is_complete": true, "first_lap": false, "flags": [], "track_name": "...", "setup_name": null,
     "ref": {"id": 9, "lap_number": 1, "lap_time": 82.9, "first_lap": false} | null,
     "lap_time_delta_s": 0.5 | null, "summary": "比参考圈慢 0.500 s，主要丢在 T3（0.31 s）",
-    "top": [{"name": "T3", "time_delta_s": 0.31, "explanation": "T3：慢 0.31 s。刹车点早 25 m"}],
+    "top": [{"name": "T3", "label": "T3", "time_delta_s": 0.31, "explanation": "T3：慢 0.31 s。刹车点早 25 m"}],
+                                 # label = 弯道表里改过的弯名（没改就和 name 一样）
                                  # 本圈或参考圈是起步圈时 top = []，summary 只报总差距（距离对不上，不做逐弯分析）
     "note": "起步圈……" | null
   },
@@ -347,7 +351,7 @@ def build_lap_summary(store, lap: LapData) -> dict:
         dt = _r(it.get("time_delta_s"), 3)
         if dt is None or dt < SUMMARY_MIN_LOSS_S:
             continue
-        top.append({"name": it.get("name"), "time_delta_s": dt, "explanation": it.get("explanation")})
+        top.append({"name": it.get("name"), "label": it.get("label"), "time_delta_s": dt, "explanation": it.get("explanation")})
     out["top"] = top
     out["note"] = "；".join(notes) or None
     return out
@@ -590,8 +594,8 @@ class LiveBroadcaster:
                 pb = {"state": "none", "reason": "查询 PB 出错"}
             if dist is None and pb and pb.get("dist") is not None:
                 dist = pb["dist"]
-            if pb:
-                pb.pop("dist", None)
+            if pb and "dist" in pb:
+                pb["dist"] = _r(pb["dist"], 1)
 
         best = _pos(fr.best_lap) or (_r(ev.best_time, 3) if ev and ev.best_time else None) or _r(ref_time, 3)
         return {
@@ -724,7 +728,13 @@ class LiveBroadcaster:
             "car_pi": res.get("car_pi") if source == "db" else (int(fr.car_pi) if fr.car_pi else None),
             "pi_match": bool(res.get("pi_match", True)) if source == "db" else True,
             "dist": dist,
+            "brake_ref": None,
         }
+        if res.get("state") == "ok" and res.get("lap_id") is not None:
+            # 刹车点提示的基准永远是存档的 PB 圈（有 lap_id 才拉得到刹车点）；本场更快的圈还没存时也用它，
+            # 距离要按它自己的口径对齐（两圈一个用游戏距离、一个用积分距离时不能混用）
+            bd = dist if source == "db" else self._delta_vs(res["rd"], res["rt"], res["integrated"], lap_t, d_field, d_int)[0]
+            out["brake_ref"] = {"lap_id": res["lap_id"], "ref_time": _r(res["lap_time"], 3), "dist": _r(bd, 1)}
         return out
 
     def _pb_job(self, key: tuple, q: dict) -> None:

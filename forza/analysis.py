@@ -201,7 +201,7 @@ def compare(ref: LapData, other: LapData, step: float = 2.0, *, corners: list[di
     if not corners:
         corners = detect_corners(ref)
     segments = _build_segments(corners, grid, rs_ref, rs_oth, delta_t, step)
-    ranking = [{"name": s["name"], "kind": s["kind"], "time_delta_s": s["time_delta_s"],
+    ranking = [{"name": s["name"], "label": s["label"], "kind": s["kind"], "time_delta_s": s["time_delta_s"],
                 "explanation": s["explanation"]}
                for s in sorted(segments, key=lambda s: s["time_delta_s"], reverse=True)]
 

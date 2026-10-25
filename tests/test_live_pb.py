@@ -55,6 +55,7 @@ def test_fm2023_pb_on_first_lap_by_track_ordinal(cfg):
         assert pb["predicted"] == pytest.approx(pb["ref_time"] + pb["delta"], abs=0.002)
         best = rt.store.query("SELECT id FROM laps WHERE lap_number=1")[0]["id"]
         assert pb["lap_id"] == best                         # 起步圈（lap_number=0）不拿来当 PB
+        assert pb["brake_ref"]["lap_id"] == best and pb["brake_ref"]["dist"] == pytest.approx(pb["dist"], abs=0.1)
         n_tracks = len(rt.store.list_tracks())
         _feed(rt, _with_pi(s.run_dist(s.lap_len), 800), "fm2023_dash")
         lap = _lap(rt)
@@ -168,6 +169,10 @@ def test_session_lap_faster_than_db_wins(cfg):
         assert rt.detector.pending is not None
         pb = _lap(rt)["pb"]
         assert pb["source"] == "session" and pb["ref_time"] == pytest.approx(s.lap_len / 40, abs=0.02)
+        # 刹车点提示还是用存档里的 PB 圈（本场这圈还没存、没有 id），距离按那圈自己的口径对齐
+        assert pb["lap_id"] is None
+        ref = pb["brake_ref"]
+        assert ref["lap_id"] is not None and ref["ref_time"] > pb["ref_time"] and ref["dist"] == pytest.approx(100, abs=15)
     finally:
         rt.shutdown()
 
