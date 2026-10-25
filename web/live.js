@@ -868,7 +868,8 @@
   // 基准圈的每个弯的刹车起点从 /api/laps/{id}/brake_points 拿（距离口径和那圈存档的 dist 一样，
   // 和实时差距用的本圈距离 lap.dist 是同一套）。没有 PB（还没存过这条赛道 + 这台车的完整圈）就不提示。
   // PB 是本场刚跑、还没存库的圈（source = session，没有 lap_id）时，接着用同一条赛道上一个存档 PB 的刹车点。
-  const brakeRef = { lapId: null, trackId: null, points: [], loading: false, label: "" };
+  const BRAKE_RETRY_MS = 5000;
+  const brakeRef = { lapId: null, trackId: null, points: [], loading: false, label: "", retryAt: 0 };
   let wasBraking = false, lastBrakeCue = "";
   async function loadBrakeRef(lapId, trackId, label) {
     brakeRef.loading = true;
@@ -877,7 +878,13 @@
     const r = await getJSON(`/api/laps/${lapId}/brake_points`);
     if (brakeRef.lapId !== lapId) return;            // 拉的过程中基准又换了
     brakeRef.loading = false;
-    brakeRef.points = r.ok && r.data && Array.isArray(r.data.points) ? r.data.points : [];
+    if (!(r.ok && r.data && Array.isArray(r.data.points))) {
+      // 拉失败（网络抖一下）：清掉基准，过几秒再试，别一直哑着到换 PB / 刷新
+      Object.assign(brakeRef, { lapId: null, trackId: null, points: [], retryAt: Date.now() + BRAKE_RETRY_MS });
+      renderBrakeInfo();
+      return;
+    }
+    brakeRef.points = r.data.points;
     brakeRef.label = label;
     renderBrakeInfo();
   }
@@ -887,7 +894,7 @@
     wasBraking = braking;
     const pb = lap && lap.pb && lap.pb.state === "ok" ? lap.pb : null;
     if (!settings.brakeCue) return;
-    if (pb && pb.lap_id && pb.lap_id !== brakeRef.lapId) loadBrakeRef(pb.lap_id, pb.track_id, `PB ${Forza.fmtLap(pb.ref_time)}`);
+    if (pb && pb.lap_id && pb.lap_id !== brakeRef.lapId && Date.now() >= brakeRef.retryAt) loadBrakeRef(pb.lap_id, pb.track_id, `PB ${Forza.fmtLap(pb.ref_time)}`);
     const usable = pb && !brakeRef.loading && brakeRef.lapId &&
       (pb.lap_id ? brakeRef.lapId === pb.lap_id : pb.track_id != null && brakeRef.trackId === pb.track_id);
     // 存档 PB：用按 PB 那圈对齐的距离（和刹车点同一口径）；本场 PB 时按本圈距离
@@ -910,6 +917,7 @@
     let hint = `和历史最快 PB 那圈同一个弯的刹车点比：早刹 ${BRAKE_TOL_M} m 以上低音一声，晚刹 ${BRAKE_TOL_M} m 以上高音两声，差不多就不响。`;
     if (settings.brakeCue) {
       if (brakeRef.lapId && !brakeRef.loading) hint += `当前基准：${brakeRef.label}，${brakeRef.points.length} 个刹车点。`;
+      else if (!brakeRef.lapId && Date.now() < brakeRef.retryAt) hint += "PB 的刹车点没拉到，过几秒自动重试。";
       else if (!brakeRef.lapId) hint += "还没有 PB：这条赛道 + 这台车存过完整圈之后才有。";
       if (!audioCtx || audioCtx.state !== "running") hint += "刷新页面后要先点一下屏幕才能出声。";
     }
