@@ -142,3 +142,25 @@ def test_already_at_limiter_before_downshift_is_not_counted(tmp_path):
     rpm[i - 3:i + 5] = 0.99 * lap.meta["engine_max_rpm"]              # 降挡前就顶着断油
     res = tuning.diagnose(lap)
     assert not any(f["id"] == "downshift_overrev" for f in res["findings"])
+
+
+def test_downshift_window_stops_at_next_gear_change(tmp_path):
+    """连降两个挡：正常的 6→5 后 0.2 s 又降 5→4 并超转，超转只算到 5→4 头上（不能算两次）。"""
+    import copy
+
+    from forza import tuning
+    from forza.lapdata import LapData
+    base = _clean_lap(tmp_path)
+    lap = LapData(meta=copy.deepcopy(base.meta), ch={k: v.copy() for k, v in base.ch.items()})
+    gear, rpm = lap["gear"], lap["rpm"]
+    max_rpm = lap.meta["engine_max_rpm"]
+    g = np.round(gear).astype(int)
+    i = next(i for i in range(200, len(g) - 200) if g[i] >= 4 and np.all(g[i - 60:i + 60] == g[i]))
+    top = g[i]
+    gear[i:i + 12] = top - 1                                              # 正常降一个挡……
+    gear[i + 12:i + 60] = top - 2                                         # ……0.2 s 后再降一个、并且超转
+    rpm[i:i + 12] = 0.8 * max_rpm
+    rpm[i + 12:i + 20] = 0.99 * max_rpm
+    res = tuning.diagnose(lap)
+    f = next(f for f in res["findings"] if f["id"] == "downshift_overrev")
+    assert f["data"]["events"] == 1, f["evidence"]

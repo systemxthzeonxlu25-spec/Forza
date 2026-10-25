@@ -31,11 +31,15 @@ def _check_downshift(ctx: _Ctx) -> None:
     # 降挡的位置：挡位变小（都是前进挡，一次最多降 max_drop 个挡，过滤倒挡 / 数据跳变）
     prev, cur = gear[:-1], gear[1:]
     drops = np.flatnonzero((prev >= 1) & (cur >= 1) & (cur < prev) & (prev - cur <= r["max_drop"])) + 1
+    # 每次换挡（升或降）的位置：每次降挡的观察窗口截到下一次换挡为止，
+    # 否则连降几个挡时，最后那一下的超转会被算到前面几次正常降挡头上
+    changes = np.flatnonzero(np.diff(gear) != 0) + 1
     events = []
     for i in drops:
         if not ctx.speed_ok[i] or rpm[i - 1] >= limit:      # 降挡前就已经在断油（那是没升挡，不是降早了）
             continue
-        j = min(ctx.n, i + win)
+        nxt = changes[changes > i]
+        j = min(ctx.n, i + win, int(nxt[0]) if nxt.size else ctx.n)
         k = i + int(np.argmax(rpm[i:j]))
         if rpm[k] >= limit:
             events.append((int(i), int(k)))

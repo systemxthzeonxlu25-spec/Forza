@@ -325,11 +325,14 @@
   // 只在油量确实在减少时显示（FH 和关了油耗模拟的比赛油量不变）。加油（油量变多）、倒带 / 重开（圈数变小）时重新算。
   const FUEL_KEEP_LAPS = 3;        // 用最近几圈的油耗中位数
   // whole = 这一圈是从过线那一刻开始看的（页面在圈中途打开时，第一圈只看到半圈，不能算一整圈的油耗）
-  const fuel = { lap: null, start: null, whole: false, used: [] };
+  // prev = 上一帧的油量：加油要和上一帧比（圈中途加油时，油量可能仍低于这圈开始时，和圈初比就发现不了）
+  const fuel = { lap: null, start: null, prev: null, whole: false, used: [] };
   function fuelLapsLeft(f, lap) {
     if (!lap || !num(lap.number) || !num(f.fuel)) return null;
-    if (fuel.lap === null || lap.number < fuel.lap || f.fuel > fuel.start + 0.01) {
-      fuel.lap = lap.number; fuel.start = f.fuel; fuel.whole = false;   // 刚打开 / 倒带重开 / 加过油：重新记
+    const refueled = fuel.prev !== null && f.fuel > fuel.prev + 0.005;
+    fuel.prev = f.fuel;
+    if (fuel.lap === null || lap.number < fuel.lap || refueled) {
+      fuel.lap = lap.number; fuel.start = f.fuel; fuel.whole = false;   // 刚打开 / 倒带重开 / 加过油：这圈不算
       if (lap.number === 0) fuel.used.length = 0;
     } else if (lap.number > fuel.lap) {                        // 过线：记下刚跑完那一圈用了多少
       const used = fuel.start - f.fuel;
