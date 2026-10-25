@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import copy
+import sys
 import threading
 import tomllib
 from pathlib import Path
 
-# 阈值文件放在 forza/ 下（不在这个包里），和以前的位置一样，用户改过的文件不用挪
-RULES_PATH = Path(__file__).resolve().parent.parent / "tuning_rules.toml"
+# 阈值文件放在 forza/ 下（不在这个包里），和以前的位置一样，用户改过的文件不用挪；
+# 打包版（Forza.exe）放在 exe 旁边，用户能直接找到、改了也不会被解包目录里的那份盖掉
+if getattr(sys, "frozen", False):
+    RULES_PATH = Path(sys.executable).resolve().parent / "tuning_rules.toml"
+else:
+    RULES_PATH = Path(__file__).resolve().parent.parent / "tuning_rules.toml"
 
 # 内置默认阈值（和 tuning_rules.toml 一致；每项的含义见 toml 里的注释）
 DEFAULT_RULES: dict = {

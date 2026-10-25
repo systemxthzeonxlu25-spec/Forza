@@ -25,6 +25,10 @@
 
 ## 1. 安装（Windows）
 
+**最省事：下载打包版**。到 GitHub 的 [Releases](../../releases) 下载 `Forza-版本号-windows.zip`，解压后双击 `Forza\Forza.exe` 就能用，不用装 Python。参数和下面的 `start.bat` 一样，例如 `Forza.exe --game fh6 --record`。`config.toml`、数据库（`data\`）和录像（`recordings\`）都放在 `Forza.exe` 旁边，升级时把这几个复制到新文件夹里就行。
+
+想跑源码（或者要改代码）就按下面的步骤：
+
 1. 装 **Python 3.11 或更新版本**（[python.org](https://www.python.org/downloads/)，安装时勾选 *Add python.exe to PATH*）。
 2. 在项目文件夹里打开 PowerShell：
 
@@ -272,7 +276,7 @@ FM (2023) 的车和赛道会直接显示真实名字（例如"Brand Hatch Tor Gr
 - 数据不够时，结论就是"数据不足"，不会硬下结论。
 - **照这条改了**：每条诊断的“可以试试”后面都有这个按钮。在游戏里按那条建议改完调校后点它，会记成一个新的调校版本（名字预填成那条建议，可以改得更具体，比如“前防倾杆 30 → 27”），之后跑的圈都归到这个版本。跑 5 圈以上，到“车辆调校”页的版本对比里看圈速变没变、针对的那项问题少没少（会标出“这次针对的”）。
 - **Data Out 判断不了的东西会单独列出来**。最重要的一条：**每个轮胎只给一个温度，没有胎面内/中/外三点温度，所以没法判断外倾角合不合适**，这个要看游戏自带的遥测轮胎页面。胎压、当前调校数值、挡位数量等也都不在包里。
-- 所有阈值都在 `forza/tuning_rules.toml`，每项都有中文注释，改完保存后下一次诊断就会生效。目前这些阈值只用假数据校准过，真实游戏数据如果偏敏感或偏迟钝，按实际情况调。
+- 所有阈值都在 `forza/tuning_rules.toml`（打包版是 `Forza.exe` 旁边的 `tuning_rules.toml`），每项都有中文注释，改完保存后下一次诊断就会生效。目前这些阈值只用假数据校准过，真实游戏数据如果偏敏感或偏迟钝，按实际情况调。
 
 ## 9. 车辆调校页（调校版本 + 动力总成）
 
@@ -309,6 +313,8 @@ FM (2023) 的车和赛道会直接显示真实名字（例如"Brand Hatch Tor Gr
 pip install -r requirements-dev.txt
 python -m pytest -q
 ```
+
+打包 exe：`pip install pyinstaller` 后在仓库根目录跑 `pyinstaller packaging/forza.spec`，结果在 `dist/Forza/`。发版本：推一个 `v` 开头的 tag（`git tag v0.2.0 && git push origin v0.2.0`），GitHub Actions（`.github/workflows/release.yml`）会在 Windows 上打包、冒烟测试，然后把 zip 发到 Releases。
 
 目录结构：
 

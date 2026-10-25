@@ -1,0 +1,87 @@
+name: release
+
+# 打 v 开头的 tag（例如 git tag v0.1.0 && git push origin v0.1.0）→ 在 Windows 上打包 Forza.exe，发到 GitHub Release。
+# 改了打包相关的文件时 PR 上也会试打一次包（不发布），手动运行（Actions 页面 Run workflow）也只打包不发布。
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/release.yml"
+      - "forza/config.py"
+      - "forza/tuning/rules.py"
+      - "requirements.txt"
+  workflow_dispatch:
+
+# 打包这一步会执行仓库里的代码（PR 的代码也算），只给读权限；发 Release 在单独的 job 里才给写权限
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements.txt pyinstaller==6.22.3
+      - run: pyinstaller --noconfirm packaging/forza.spec
+
+      - name: 冒烟测试（生成假数据 → 回放 → 网页和接口能打开）
+        shell: pwsh
+        run: |
+          $dir = "dist/Forza"
+          & "$dir/Forza.exe" fake -o "$dir/smoke.frec" --laps 2 --no-pause
+          if ($LASTEXITCODE -ne 0) { throw "fake 失败" }
+          $p = Start-Process -FilePath "$dir/Forza.exe" -WorkingDirectory $dir -PassThru -NoNewWindow `
+               -ArgumentList "--no-pause","--http-port","8131","--udp-port","5701","--replay","smoke.frec"
+          $ok = $false
+          for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try { $ok = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8131/).StatusCode -eq 200 } catch {}
+          }
+          if (-not $ok) { Stop-Process -Id $p.Id -Force; throw "网页没起来" }
+          foreach ($u in "/laps.html", "/api/status", "/api/tuning/rules") {
+            $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8131$u"
+            if ($r.StatusCode -ne 200) { Stop-Process -Id $p.Id -Force; throw "$u 返回 $($r.StatusCode)" }
+          }
+          $rules = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8131/api/tuning/rules).Content | ConvertFrom-Json
+          if ($rules.source -match "_internal" -or $rules.error) { Stop-Process -Id $p.Id -Force; throw "调车阈值没从 exe 旁边读：$($rules.source) $($rules.error)" }
+          Stop-Process -Id $p.Id -Force
+          Start-Sleep -Seconds 2
+          Remove-Item -Recurse -Force "$dir/data", "$dir/smoke.frec", "$dir/smoke.truth.json" -ErrorAction SilentlyContinue
+
+      - name: 打 zip
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist/Forza/
+          $name = if ($env:GITHUB_REF_TYPE -eq "tag") { "Forza-$env:GITHUB_REF_NAME-windows" } else { "Forza-dev-windows" }
+          Compress-Archive -Path dist/Forza -DestinationPath "$name.zip"
+          "ZIP=$name.zip" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forza-windows
+          path: ${{ env.ZIP }}
+
+  publish:
+    needs: windows-exe
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: forza-windows
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Forza-*-windows.zip
+          generate_release_notes: true
