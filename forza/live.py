@@ -97,7 +97,8 @@ compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十
     "is_complete": true, "first_lap": false, "flags": [], "track_name": "...", "setup_name": null,
     "ref": {"id": 9, "lap_number": 1, "lap_time": 82.9, "first_lap": false} | null,
     "lap_time_delta_s": 0.5 | null, "summary": "比参考圈慢 0.500 s，主要丢在 T3（0.31 s）",
-    "top": [{"name": "T3", "time_delta_s": 0.31, "explanation": "T3：慢 0.31 s。刹车点早 25 m"}],
+    "top": [{"name": "T3", "label": "T3", "time_delta_s": 0.31, "explanation": "T3：慢 0.31 s。刹车点早 25 m"}],
+                                 # label = 弯道表里改过的弯名（没改就和 name 一样）
                                  # 本圈或参考圈是起步圈时 top = []，summary 只报总差距（距离对不上，不做逐弯分析）
     "note": "起步圈……" | null
   },
@@ -347,7 +348,7 @@ def build_lap_summary(store, lap: LapData) -> dict:
         dt = _r(it.get("time_delta_s"), 3)
         if dt is None or dt < SUMMARY_MIN_LOSS_S:
             continue
-        top.append({"name": it.get("name"), "time_delta_s": dt, "explanation": it.get("explanation")})
+        top.append({"name": it.get("name"), "label": it.get("label"), "time_delta_s": dt, "explanation": it.get("explanation")})
     out["top"] = top
     out["note"] = "；".join(notes) or None
     return out

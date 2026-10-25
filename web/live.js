@@ -49,7 +49,7 @@
   // ======================= 本机设置 =======================
   // deltaRef：实时差距对比“本场最快”(session) 还是“历史最快 PB”(pb)；seenSummary：最近看过的小结 id（不重复弹）
   const DEFAULTS = { unit: "kmh", hz: 20, awakeHintDone: false, dismissed: {}, deltaRef: "session",
-    seenSummary: null, snapMin: 10, shiftTone: false };
+    seenSummary: null, snapMin: 10, shiftTone: false, voiceSummary: false };
   const settings = loadSettings();
 
   function loadSettings() {
@@ -682,6 +682,7 @@
     for (const b of document.querySelectorAll("#set-snap button")) b.classList.toggle("on", Number(b.dataset.v) === Number(settings.snapMin));
     renderShiftInfo();
     renderToneInfo();
+    renderVoiceInfo();
     renderSetupInfo();
   }
   function setUnit(u) {
@@ -1052,7 +1053,10 @@
     settings.seenSummary = s.id;
     saveSettings();
     const age = num(serverT) && num(s.t) ? serverT - s.t : 0;
-    if (age <= SUMMARY_MAX_AGE_S) showCard(s);
+    if (age <= SUMMARY_MAX_AGE_S) {
+      showCard(s);
+      speakSummary(s);
+    }
   }
   function lapTitle(s) {
     const n = s.kind === "sprint" ? "冲刺赛" : `第 ${num(s.lap_number) ? s.lap_number + 1 : "-"} 圈`;
@@ -1083,6 +1087,60 @@
     clearTimeout(cardTimer);
     cardTimer = setTimeout(hideCard, SUMMARY_SHOW_MS);
   }
+  // ======================= 过线语音播报 =======================
+  // 小结弹出时用浏览器自带的语音合成念一句短的：圈时、和参考圈差多少、主要丢在哪。眼睛不用看手机。
+  const hasSpeech = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+  function sayTime(sec) {
+    if (!num(sec) || sec <= 0) return "";
+    const m = Math.floor(sec / 60), r = sec - m * 60;
+    const rs = r.toFixed(1).replace(/\.0$/, "");
+    return m > 0 ? `${m}分${rs}秒` : `${rs}秒`;
+  }
+  // "T3" 念成“3号弯”；自己起的弯名原样念
+  function sayCorner(name) {
+    const m = /^T(\d+)$/i.exec(String(name || ""));
+    return m ? `${m[1]}号弯` : String(name || "");
+  }
+  function speechText(s) {
+    if (!s.is_complete) return "";
+    const parts = [sayTime(s.lap_time)];
+    const d = s.lap_time_delta_s;
+    if (num(d) && s.ref) {
+      parts.push(Math.abs(d) < 0.05 ? "和参考圈差不多" : `${d > 0 ? "慢" : "快"}${Math.abs(d).toFixed(1)}秒`);
+      const names = (s.top || []).slice(0, 2).map((t) => sayCorner(t.label || t.name)).filter(Boolean);
+      if (d > 0 && names.length) parts.push(`主要丢在${names.join("和")}`);
+      if (s.first_lap || s.ref.first_lap) parts.push("有起步圈，只供参考");   // 起步圈含发车格那段，圈时没法直接比
+    } else if (!s.ref) {
+      parts.push("还没有参考圈");
+    }
+    return parts.filter(Boolean).join("，");
+  }
+  function speak(text) {
+    if (!hasSpeech || !text) return;
+    try {
+      speechSynthesis.cancel();                    // 上一句还没念完就换新的
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "zh-CN";
+      u.rate = 1.15;
+      speechSynthesis.speak(u);
+    } catch (_) { /* 有的浏览器在后台会拒绝：不念就算了 */ }
+  }
+  function speakSummary(s) {
+    if (settings.voiceSummary) speak(speechText(s));
+  }
+  function renderVoiceInfo() {
+    for (const b of document.querySelectorAll("#set-voice button")) b.classList.toggle("on", b.dataset.v === (settings.voiceSummary ? "on" : "off"));
+    setText($("voice-hint"), hasSpeech ? "过线小结弹出时念一句：圈时、比参考圈快慢多少、主要丢在哪个弯。" : "这个浏览器不支持语音合成。");
+  }
+  $("set-voice").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    settings.voiceSummary = b.dataset.v === "on";
+    saveSettings();
+    renderVoiceInfo();
+    if (settings.voiceSummary) speak("1分22.4秒，慢0.4秒，主要丢在5号弯");   // 试听（也顺便让浏览器记住用户点过）
+  });
+
   function hideCard() {
     clearTimeout(cardTimer);
     E.sumCard.hidden = true;
