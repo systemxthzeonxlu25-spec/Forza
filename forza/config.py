@@ -1,12 +1,13 @@
 """全局配置。
 
-优先级：命令行参数 > 项目根目录的 config.toml > 这里的默认值。
+优先级：命令行参数 > 项目根目录（打包版是 exe 所在目录）的 config.toml > 这里的默认值。
 config.toml 示例见 config.example.toml。
 """
 from __future__ import annotations
 
 import ipaddress
 import logging
+import sys
 import tomllib
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -18,8 +19,13 @@ from .profiles import PROFILES
 
 log = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parent.parent
-WEB_DIR = ROOT / "web"
+if getattr(sys, "frozen", False):
+    # 打包成 exe（PyInstaller）：config.toml / data / recordings 放在 exe 旁边，网页文件在解包目录里
+    ROOT = Path(sys.executable).resolve().parent
+    WEB_DIR = Path(getattr(sys, "_MEIPASS", ROOT)) / "web"
+else:
+    ROOT = Path(__file__).resolve().parent.parent
+    WEB_DIR = ROOT / "web"
 
 # 指向“本机”的地址：转发目标是这些地址 + 自己的 UDP 端口时，包会转回给自己，无限循环
 _SELF_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1", ""}

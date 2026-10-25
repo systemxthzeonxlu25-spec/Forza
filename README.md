@@ -25,6 +25,10 @@
 
 ## 1. 安装（Windows）
 
+**最省事：下载打包版**。到 GitHub 的 [Releases](../../releases) 下载 `Forza-版本号-windows.zip`，解压后双击 `Forza\Forza.exe` 就能用，不用装 Python。参数和下面的 `start.bat` 一样，例如 `Forza.exe --game fh6 --record`。`config.toml`、数据库（`data\`）和录像（`recordings\`）都放在 `Forza.exe` 旁边，升级时把这几个复制到新文件夹里就行。
+
+想跑源码（或者要改代码）就按下面的步骤：
+
 1. 装 **Python 3.11 或更新版本**（[python.org](https://www.python.org/downloads/)，安装时勾选 *Add python.exe to PATH*）。
 2. 在项目文件夹里打开 PowerShell：
 
@@ -309,6 +313,8 @@ FM (2023) 的车和赛道会直接显示真实名字（例如"Brand Hatch Tor Gr
 pip install -r requirements-dev.txt
 python -m pytest -q
 ```
+
+打包 exe：`pip install pyinstaller` 后在仓库根目录跑 `pyinstaller packaging/forza.spec`，结果在 `dist/Forza/`。发版本：推一个 `v` 开头的 tag（`git tag v0.2.0 && git push origin v0.2.0`），GitHub Actions（`.github/workflows/release.yml`）会在 Windows 上打包、冒烟测试，然后把 zip 发到 Releases。
 
 目录结构：
 
