@@ -34,6 +34,7 @@ from .check_brakes import _check_brake_balance, _check_brakes
 from .check_brake_pressure import _check_brake_pressure
 from .check_differential import _check_differential
 from .check_gearing import _check_gearing
+from .check_downshift import _check_downshift
 from .blocks import _balance_block, _body_block, _body_samples, _brake_block
 
 # ================================================================ 交叉印证
@@ -83,7 +84,7 @@ def _rules_info(rules: dict | None) -> dict:
 
 
 CHECKS = (_check_balance, _check_suspension, _check_tires, _check_traction, _check_brakes, _check_brake_balance,
-          _check_brake_pressure, _check_differential, _check_gearing)
+          _check_brake_pressure, _check_differential, _check_gearing, _check_downshift)
 
 
 def _run(lap: LapData, info: dict, corners: list[dict] | None, abs_on: bool | None, aero: bool | None) -> tuple[dict, _Ctx]:

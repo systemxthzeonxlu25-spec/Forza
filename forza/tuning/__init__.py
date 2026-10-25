@@ -20,7 +20,8 @@
 检查项（都在下面各自的 _check_xxx 函数里，好找好改）：
     转向平衡（按弯道阶段的转向不足 / 转向过度）、悬挂触底 / 伸到底、胎温不平衡、
     出弯空转（含内侧 / 外侧轮、四驱前后轴）、刹车抱死、刹车平衡（直线重刹前后轴滑移）、
-    刹车压力（踏板-减速度饱和）、差速器（入弯松刹内侧轮 / 四驱前后分配）、齿比（最高挡撞断油 / 转速余量）。
+    刹车压力（踏板-减速度饱和）、差速器（入弯松刹内侧轮 / 四驱前后分配）、齿比（最高挡撞断油 / 转速余量）、
+    降挡超转（降挡太早）。
 
 分析块（不是 finding，是给页面画图的量化数据，见 _balance_block / _brake_block / _body_block）：
     balance_map    平衡指数 B = 前轴 |侧偏角| − 后轴 |侧偏角|，按车速分档 + 弯 × 入弯/弯中/出弯 热力表 + 解读句
@@ -39,6 +40,7 @@
     check_brake_pressure.py  ⑤c 刹车压力（以及按车速分档的工具函数）
     check_differential.py    ⑤d 差速器
     check_gearing.py         ⑥ 齿比
+    check_downshift.py       ⑦ 降挡超转（降挡太早）
     blocks.py                三个分析块（平衡指数分布 / 刹车分析 / 车身与悬挂）
     diagnosis.py             主流程：跑检查 → 交叉印证 → 拼结果；diagnose / diagnose_many / track_outline
 

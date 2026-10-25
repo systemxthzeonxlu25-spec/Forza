@@ -14,7 +14,7 @@ AXLE_WHEELS = {"front": ("fl", "fr"), "rear": ("rl", "rr")}
 PHASE_CN = {"entry": "入弯", "mid": "弯中", "exit": "出弯", "straight": "直道"}
 PHASES = ("entry", "mid", "exit")
 CATEGORY_CN = {"balance": "转向平衡", "suspension": "悬挂", "tires": "轮胎", "traction": "牵引",
-               "brakes": "刹车", "differential": "差速器", "gearing": "齿比"}
+               "brakes": "刹车", "differential": "差速器", "gearing": "齿比", "shifting": "换挡"}
 SEVERITY_RANK = {"info": 0, "warn": 1, "alert": 2}
 CONF_LEVELS = ("low", "medium", "high")
 DRIVETRAIN_CN = {0: "前驱 FWD", 1: "后驱 RWD", 2: "四驱 AWD"}
@@ -27,7 +27,7 @@ CHECK_LIST = (
     ("balance", "转向平衡（转向不足 / 转向过度）"), ("suspension", "悬挂触底 / 伸到底"), ("tires", "胎温平衡"),
     ("traction", "驱动轮空转"), ("brakes", "刹车抱死"), ("brake_balance", "刹车平衡（直线重刹时前后轴滑移）"),
     ("brake_pressure", "刹车压力（踏板-减速度饱和）"), ("differential", "差速器（入弯松刹内侧轮 / 四驱前后分配）"),
-    ("gearing", "齿比（最高挡撞断油 / 转速余量）"),
+    ("gearing", "齿比（最高挡撞断油 / 转速余量）"), ("downshift", "降挡超转（降挡太早）"),
 )
 CHECK_NAME = dict(CHECK_LIST)
 

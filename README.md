@@ -237,6 +237,7 @@ FM (2023) 的车和赛道会直接显示真实名字（例如"Brand Hatch Tor Gr
 | 刹车压力 | 踏板深度和减速 G 的关系，按车速分档并扣掉风阻 / 发动机制动。如果踏板踩到 80% 以内减速 G 就不再增加，说明压力偏大，后面那段踏板行程是白踩的 |
 | 差速器 | 出弯空转时，区分只有内侧轮空转、只有外侧轮空转还是两边一起空转；入弯收油时内侧驱动轮打滑（对应减速锁止）；四驱车还会看前后轴的滑移比（对应中央差速器） |
 | 齿比 | 最高挡顶着断油转速跑了多久 |
+| 降挡超转 | 降挡后 0.8 秒内转速冲到最高转速的 98% 以上：车速还太快就降了挡（思路参考 [Pacefinder](https://github.com/estetika101/pacefinderapp) 的 bad_shift 检测）。主要是驾驶习惯，用自动挡时参考意义不大 |
 
 页面顶部有两个选项会影响结论的说法：
 
@@ -344,4 +345,4 @@ tests/            pytest，全部基于假数据 / 手搓帧，不需要游戏
 ## 致谢
 
 - FM (2023) 车辆 / 赛道编号表：[bluemanos/forza-motorsport-car-track-ordinal](https://github.com/bluemanos/forza-motorsport-car-track-ordinal)（MIT），原样收录在 `forza/data/`。
-- 预测式换挡提示的思路来自 [theRTB/ForzaShiftTone](https://github.com/theRTB/ForzaShiftTone)，油耗推算参考 [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard)，单圈导出 CSV 参考 [austinbaccus/forza-telemetry](https://github.com/austinbaccus/forza-telemetry)。只借鉴了做法，没有复制这些项目的代码。
+- 预测式换挡提示的思路来自 [theRTB/ForzaShiftTone](https://github.com/theRTB/ForzaShiftTone)，油耗推算参考 [snipem/gt7dashboard](https://github.com/snipem/gt7dashboard)，降挡超转检测参考 [estetika101/pacefinderapp](https://github.com/estetika101/pacefinderapp)，单圈导出 CSV 参考 [austinbaccus/forza-telemetry](https://github.com/austinbaccus/forza-telemetry)。只借鉴了做法，没有复制这些项目的代码。

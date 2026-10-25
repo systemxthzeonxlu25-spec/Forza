@@ -2,6 +2,8 @@
 import csv
 import io
 
+import numpy as np
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -86,3 +88,57 @@ def test_track_ordinal_zero_is_a_real_track(tmp_path):
     b = store.find_or_create_track(start_x=5000, start_z=5000, **kw)     # 起点位置差很远也是同一条
     assert a == b and store.get_track(a)["track_ordinal"] == 0
     assert store.get_track(a)["provisional_length_m"] is None             # 有 ID 的赛道不记暂定圈长
+
+
+# ---------------------------------------------------------------- 降挡超转（思路参考 Pacefinder 的 bad_shift）
+
+def _clean_lap(tmp_path):
+    from forza.fake import write_fake_recording
+    from forza.hub import Hub
+    from forza.laps import LapDetector
+    from forza.replay import import_file
+    rec = tmp_path / "clean.frec"
+    write_fake_recording(rec, "fm2023_dash", laps=3, issues=False, seed=12)
+    hub, det, laps = Hub(), LapDetector(), []
+    det.add_listener(laps.append)
+    hub.subscribe(det.on_frame)
+    import_file(rec, hub)
+    det.flush()
+    return next(l for l in laps if l.meta["is_complete"] and "first_lap" not in l.meta["flags"])
+
+
+def test_downshift_overrev_detected(tmp_path):
+    import copy
+
+    from forza import tuning
+    from forza.lapdata import LapData
+    base = _clean_lap(tmp_path)
+    res = tuning.diagnose(base)
+    st = {c["id"]: c for c in res["checks"]}
+    assert st["downshift"]["status"] == "ok", st["downshift"]          # 正常驾驶：不报
+
+    lap = LapData(meta=copy.deepcopy(base.meta), ch={k: v.copy() for k, v in base.ch.items()})
+    gear, rpm = np.round(lap["gear"]).astype(int), lap["rpm"]
+    max_rpm = lap.meta["engine_max_rpm"]
+    drops = [i for i in range(1, len(gear)) if 1 <= gear[i] < gear[i - 1]]
+    assert len(drops) >= 3
+    for i in drops[:3]:                                                 # 前三次降挡后转速冲到 99%
+        rpm[i:i + 5] = 0.99 * max_rpm
+    res = tuning.diagnose(lap)
+    f = next(f for f in res["findings"] if f["id"] == "downshift_overrev")
+    assert f["category"] == "shifting" and f["data"]["events"] == 3 and f["severity"] == "alert"
+    assert len(f["locations"]) == 3 and all(l["label"] for l in f["locations"])
+
+
+def test_already_at_limiter_before_downshift_is_not_counted(tmp_path):
+    import copy
+
+    from forza import tuning
+    from forza.lapdata import LapData
+    base = _clean_lap(tmp_path)
+    lap = LapData(meta=copy.deepcopy(base.meta), ch={k: v.copy() for k, v in base.ch.items()})
+    gear, rpm = np.round(lap["gear"]).astype(int), lap["rpm"]
+    i = next(i for i in range(1, len(gear)) if 1 <= gear[i] < gear[i - 1])
+    rpm[i - 3:i + 5] = 0.99 * lap.meta["engine_max_rpm"]              # 降挡前就顶着断油
+    res = tuning.diagnose(lap)
+    assert not any(f["id"] == "downshift_overrev" for f in res["findings"])
