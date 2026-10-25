@@ -463,11 +463,59 @@ def _untagged(other: dict) -> dict:
             "name": UNTAGGED_NAME, "note": None, "created_at": None}
 
 
+def _sector_compare(store, track_id: int, A: dict, B: dict, laps: list[dict]) -> dict | None:
+    """两个版本按赛道固定弯道表逐段比：每段两边用时的中位数、差（B − A，负 = B 快）和噪音阈值（同圈速的 2 × 标准误）。
+    只用两边没被当成失误圈的飞驰圈。没有弯道表（生成不了）时返回 None。"""
+    from .sectors import _lap_stats, ensure_layout
+
+    try:
+        layout = ensure_layout(store, track_id)
+    except Exception:
+        log.exception("版本逐段对比：读取弯道表失败")
+        return None
+    if not layout or not layout.get("sectors"):
+        return None
+    meta = {l["id"]: l for l in laps}
+    n_sec = len(layout["sectors"])
+
+    def side_times(side: dict) -> list[list[float]]:
+        out = []
+        for r in side["laps"]:
+            if r["outlier"] or r["id"] not in meta:
+                continue
+            st = _lap_stats(store, meta[r["id"]], layout)
+            ts = st and st.get("times")
+            if ts and len(ts) == n_sec and all(math.isfinite(x) and x > 0 for x in ts):
+                out.append(ts)
+        return out
+
+    ta, tb = side_times(A), side_times(B)
+    names = {c["code"]: c.get("name") or c["code"] for c in layout["corners"]}
+    rows = []
+    for i, sec in enumerate(layout["sectors"]):
+        xa, xb = [t[i] for t in ta], [t[i] for t in tb]
+        row = {"code": sec["code"], "name": names.get(sec["code"], sec["code"]), "n_a": len(xa), "n_b": len(xb),
+               "a_median_s": round(statistics.median(xa), 3) if xa else None,
+               "b_median_s": round(statistics.median(xb), 3) if xb else None,
+               "delta_s": None, "noise_s": None, "verdict": "few"}
+        if xa and xb:
+            row["delta_s"] = round(row["b_median_s"] - row["a_median_s"], 3)
+        if len(xa) >= MIN_LAPS and len(xb) >= MIN_LAPS:
+            thr = max(NOISE_K * math.sqrt(statistics.stdev(xa) ** 2 / len(xa) + statistics.stdev(xb) ** 2 / len(xb)),
+                      MIN_NOISE_S)
+            row["noise_s"] = round(thr, 3)
+            d = row["b_median_s"] - row["a_median_s"]
+            row["verdict"] = "noise" if abs(d) < thr else ("faster" if d < 0 else "slower")
+        rows.append(row)
+    return {"laps": {"a": len(ta), "b": len(tb)}, "sectors": rows}
+
+
 def compare_setups(store, a_id: int, b_id: int, track_id: int | None = None) -> dict:
     """版本 A（参考）对比版本 B。delta_median_s = B 中位数 − A 中位数（负 = B 快）。
     a_id / b_id 可以是 UNTAGGED_ID（0）= 这台车没记版本的圈（另一边必须是真实版本，用它确定是哪台车）。
 
     verdict："faster" = B 比 A 快、"slower" = B 比 A 慢、"noise" = 差别在噪音内（或圈数不够，enough_laps=false）。
+    sectors：按赛道固定弯道表逐段比（见 _sector_compare），每段 verdict 多一种 "few" = 某边不到 MIN_LAPS 圈。
     """
     ensure_schema(store)
     if a_id == b_id:
@@ -522,6 +570,8 @@ def compare_setups(store, a_id: int, b_id: int, track_id: int | None = None) -> 
         for side, vals in (("A", va), ("B", vb)):
             if len(vals) > 1:
                 out["notes"].append(f"版本 {side} 的圈里出现了不同的{cn}（{' / '.join(_num(v) for v in vals)}）：像是中途换了改装。")
+    # 逐段对比：哪个弯快了、哪个弯慢了（赛道固定弯道表的分段，首尾相接、加起来就是整圈）
+    out["sectors"] = _sector_compare(store, tid, A, B, laps_a + laps_b) if tid is not None else None
     # 诊断对比：每边最近 MAX_DIAG_LAPS 圈（失误圈不算）
     if tid is not None:
         ids_a = [l["id"] for l in A["laps"] if not l["outlier"]][-MAX_DIAG_LAPS:]

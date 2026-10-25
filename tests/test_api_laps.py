@@ -257,3 +257,16 @@ def test_laps_page_has_new_sections(client):
 def test_huge_integer_params_are_400_not_500(client):
     for url in ("/api/laps/99999999999999999999", "/api/laps?track_id=99999999999999999999"):
         assert client.get(url).status_code in (400, 404)
+
+
+def test_brake_points(client):
+    """实时面板刹车点提示的基准：每个弯的刹车起点，按距离排好，弯名用固定弯道表的。"""
+    lid = _ids(client)[3]
+    r = client.get(f"/api/laps/{lid}/brake_points")
+    assert r.status_code == 200
+    pts = r.json()["points"]
+    assert len(pts) >= 3
+    ds = [p["dist_m"] for p in pts]
+    assert ds == sorted(ds) and all(d >= 0 for d in ds)
+    assert all(p["label"] for p in pts)
+    assert client.get("/api/laps/99999/brake_points").status_code == 404

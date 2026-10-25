@@ -156,6 +156,24 @@ def lap_reference(request: Request, lap_id: int):
     return {"lap_id": lap_id, "reference": jsonable(_add_best_info(store, [ref])[0]) if ref else None}
 
 
+@router.get("/laps/{lap_id}/brake_points")
+def lap_brake_points(request: Request, lap_id: int):
+    """一圈里每个弯的刹车起点（距离 m，口径和这圈的 dist 通道一样），实时面板的刹车点提示拿它当基准。
+    弯道优先用赛道的固定弯道表（弯名是用户看到的那套），没有就用这圈自己识别。"""
+    store = _store(request)
+    lap = store.get_lap(lap_id)
+    if lap is None:
+        raise HTTPException(404, f"圈 #{lap_id} 不存在（可能已经删掉了）")
+    corners = _fixed_corners(store, lap)
+    if not corners:
+        from ..corners import detect_corners
+        corners = detect_corners(lap)
+    points = [{"name": c.get("name"), "label": c.get("label") or c.get("name"), "dist_m": round(float(c["brake_start_m"]), 1)}
+              for c in corners if c.get("brake_start_m") is not None]
+    points.sort(key=lambda p: p["dist_m"])
+    return {"lap_id": lap_id, "points": points}
+
+
 @router.patch("/laps/{lap_id}")
 def patch_lap(request: Request, lap_id: int, body: LapPatch):
     store = _store(request)

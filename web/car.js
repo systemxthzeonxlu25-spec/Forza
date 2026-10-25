@@ -322,10 +322,32 @@
         <span><i class="hollow"></i>失误圈（不计）</span><span><i class="band"></i>A 中位数 ± 噪音范围：B 的中位数（竖线）落在里面 = 在噪音内</span>
       </div>
       ${(c.notes || []).map((n) => `<p class="hint">${esc(n)}</p>`).join("")}
+      ${sectorsTable(c)}
       ${findingsTable(c)}
       <p class="muted small method">${esc(c.method || "")}</p>
       <p class="tip small">${esc(c.tip || "")}</p>`;
     drawStrip();
+  }
+
+  // 逐弯对比：赛道固定弯道表的每一段（一个弯 + 前后各半段直道），两边中位数用时的差
+  function sectorsTable(c) {
+    const sc = c.sectors;
+    if (!sc || !(sc.sectors || []).length) return "";
+    const v = {
+      faster: (d) => `<span class="chg-fewer">B 快 ${Math.abs(d).toFixed(3)} s</span>`,
+      slower: (d) => `<span class="chg-more">B 慢 ${Math.abs(d).toFixed(3)} s</span>`,
+      noise: (d) => `<span class="muted">${num(d) ? F.fmtDelta(d, 3) : ""}（噪音内）</span>`,
+      few: (d) => `<span class="muted">${num(d) ? F.fmtDelta(d, 3) : "--"}（圈数不够）</span>`,
+    };
+    const rows = sc.sectors.map((s) => `<tr${s.verdict === "faster" || s.verdict === "slower" ? "" : ` class="dim"`}>
+      <td>${esc(s.name)}${s.name !== s.code ? ` <span class="muted">${esc(s.code)}</span>` : ""}</td>
+      <td class="num">${fmtS(s.a_median_s)}</td><td class="num">${fmtS(s.b_median_s)}</td>
+      <td>${(v[s.verdict] || v.few)(s.delta_s)}</td></tr>`).join("");
+    return `<h3>逐弯对比 <span class="muted small">（每段 = 一个弯加前后各半段直道，A ${sc.laps.a} 圈 / B ${sc.laps.b} 圈的中位数）</span></h3>
+      <div class="tbl-wrap"><table>
+      <thead><tr><th>弯</th><th class="num"><span class="tag-a">A</span> 用时</th><th class="num"><span class="tag-b">B</span> 用时</th><th>变化</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <p class="muted small">每段也按两边圈速的波动算噪音范围（和上面整圈一样是 2 × 标准误），超出范围才算真快了 / 慢了。</p>`;
   }
 
   function findingsTable(c) {

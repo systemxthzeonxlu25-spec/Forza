@@ -263,6 +263,13 @@ def test_api_full_flow(cfg, recs):
             rev = next(f for fid, f in by_id.items() if "rev_limiter" in fid)
             assert rev["a"]["laps_with"] == cmp_["diag_laps"]["a"] and rev["b"]["laps_with"] == 0
             assert rev["a"]["total_s"] > 1.0 and rev["change"] == "fewer"
+            # 逐段对比：每段两边都有中位数，各段 B − A 加起来 ≈ 两边各段中位数之和的差
+            sec = cmp_["sectors"]
+            assert sec and sec["laps"]["a"] >= 3 and sec["laps"]["b"] >= 3 and len(sec["sectors"]) >= 3
+            for row in sec["sectors"]:
+                assert row["a_median_s"] > 0 and row["b_median_s"] > 0 and row["name"]
+                assert row["delta_s"] == pytest.approx(row["b_median_s"] - row["a_median_s"], abs=0.002)
+                assert row["verdict"] in ("faster", "slower", "noise")
 
             # 改名、设为当前、错误码
             assert c.patch(f"/api/setups/{a['id']}", json={"name": "基准"}).json()["name"] == "基准"

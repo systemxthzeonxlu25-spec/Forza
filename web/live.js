@@ -23,6 +23,12 @@
   const TONE_VOL = 0.25;        // 音量（0~1）
   const TONE_MIN_THROTTLE = 0.5;   // 油门低于这个不响（下坡空挡溜、降挡补油时转速也会涨）
   const TONE_REARM = 0.9;       // 同一挡位里转速要掉到换挡点的 90% 以下才会再响（防止预测抖动连响）
+  // 刹车点提示：每次开始刹车时，和 PB 那圈同一个弯的刹车起点比，早了低音一声、晚了高音两声，差不多就不响
+  const BRAKE_ON = 0.10;        // 刹车超过这个（0~1）算开始刹车（和 forza/corners.py 的 BRAKE_ON 一样）
+  const BRAKE_TOL_M = 15;       // 和 PB 的刹车点差在 ±这么多米以内：不响
+  const BRAKE_MATCH_M = 80;     // 离 PB 最近的刹车点超过这么远：不是同一个弯的刹车（比如中途补刹），不比
+  const BRAKE_EARLY_HZ = 700;   // 早刹：低音一声
+  const BRAKE_LATE_HZ = 2400;   // 晚刹：高音两声
   const CAR_INFO_REFRESH_MS = 60000;   // 换挡点 / 当前调校版本多久重新拉一次（换车时立刻拉）
   const SUMMARY_SHOW_MS = 10000;       // 本圈小结卡片显示多久
   const SUMMARY_MAX_AGE_S = 120;       // 刚打开页面时，比这更早的小结只放进菜单、不弹卡片
@@ -49,7 +55,7 @@
   // ======================= 本机设置 =======================
   // deltaRef：实时差距对比“本场最快”(session) 还是“历史最快 PB”(pb)；seenSummary：最近看过的小结 id（不重复弹）
   const DEFAULTS = { unit: "kmh", hz: 20, awakeHintDone: false, dismissed: {}, deltaRef: "session",
-    seenSummary: null, snapMin: 10, shiftTone: false, voiceSummary: false };
+    seenSummary: null, snapMin: 10, shiftTone: false, voiceSummary: false, brakeCue: false };
   const settings = loadSettings();
 
   function loadSettings() {
@@ -266,6 +272,7 @@
     setCls(body, "rpm-warn", shState === "warn");
     setCls(body, "rpm-shift", shState === "shift");
     shiftToneTick(shState, f, sh, rpm);
+    brakeCueTick(f, lap);
     if (sh && E.rpmTicks._shift !== sh.now) {          // 转速条上标出这一挡的换挡点
       E.rpmTicks._shift = sh.now;
       E.rpmRow.style.setProperty("--shift-at", maxr > 0 ? `${clamp(sh.now / maxr, 0, 1) * 100}%` : "200%");
@@ -683,6 +690,7 @@
     renderShiftInfo();
     renderToneInfo();
     renderVoiceInfo();
+    renderBrakeInfo();
     renderSetupInfo();
   }
   function setUnit(u) {
@@ -806,13 +814,14 @@
     return audioCtx;
   }
   // 返回是否真的出了声（声音还没被浏览器放行时返回 false）
-  function beep() {
+  // hz = 音高；delay = 推迟几秒响（连响两声用）
+  function beep(hz = TONE_HZ, delay = 0) {
     const ctx = audioCtx;
     if (!ctx || ctx.state !== "running") return false;
-    const t0 = ctx.currentTime, dur = TONE_MS / 1000;
+    const t0 = ctx.currentTime + delay, dur = TONE_MS / 1000;
     const osc = ctx.createOscillator(), gain = ctx.createGain();
     osc.type = "square";
-    osc.frequency.value = TONE_HZ;
+    osc.frequency.value = hz;
     gain.gain.setValueAtTime(0, t0);                       // 5 ms 淡入淡出，避免爆音
     gain.gain.linearRampToValueAtTime(TONE_VOL, t0 + 0.005);
     gain.gain.setValueAtTime(TONE_VOL, t0 + dur - 0.005);
@@ -841,7 +850,7 @@
     setText($("tone-hint"), hint);
   }
   // 浏览器要求先有用户操作：开着提示音时，每次点屏幕都顺手确认一下声音可用
-  document.addEventListener("pointerdown", () => { if (settings.shiftTone) ensureAudio(); });
+  document.addEventListener("pointerdown", () => { if (settings.shiftTone || settings.brakeCue) ensureAudio(); });
   $("set-tone").addEventListener("click", (ev) => {
     const b = ev.target.closest("button");
     if (!b) return;
@@ -853,6 +862,65 @@
       (ctx.state === "running" ? Promise.resolve() : ctx.resume()).then(() => { beep(); renderToneInfo(); }).catch(() => renderToneInfo());
     }
     renderToneInfo();
+  });
+
+  // ======================= 刹车点提示（基准 = 历史最快 PB 那圈） =======================
+  // 基准圈的每个弯的刹车起点从 /api/laps/{id}/brake_points 拿（距离口径和那圈存档的 dist 一样，
+  // 和实时差距用的本圈距离 lap.dist 是同一套）。没有 PB（还没存过这条赛道 + 这台车的完整圈）就不提示。
+  const brakeRef = { lapId: null, points: [], loading: false, label: "" };
+  let wasBraking = false, lastBrakeCue = "";
+  async function loadBrakeRef(lapId, label) {
+    brakeRef.loading = true;
+    brakeRef.lapId = lapId;
+    const r = await getJSON(`/api/laps/${lapId}/brake_points`);
+    if (brakeRef.lapId !== lapId) return;            // 拉的过程中基准又换了
+    brakeRef.loading = false;
+    brakeRef.points = r.ok && r.data && Array.isArray(r.data.points) ? r.data.points : [];
+    brakeRef.label = label;
+    renderBrakeInfo();
+  }
+  function brakeCueTick(f, lap) {
+    const braking = num(f.brake) && f.brake >= BRAKE_ON;
+    const onset = braking && !wasBraking;
+    wasBraking = braking;
+    const pb = lap && lap.pb && lap.pb.state === "ok" && lap.pb.lap_id ? lap.pb : null;
+    if (!settings.brakeCue) return;
+    if (pb && pb.lap_id !== brakeRef.lapId) loadBrakeRef(pb.lap_id, `PB ${Forza.fmtLap(pb.ref_time)}`);
+    if (!onset || !pb || brakeRef.loading || brakeRef.lapId !== pb.lap_id || lap.first_lap || !num(lap.dist)) return;
+    let best = null;
+    for (const p of brakeRef.points) {
+      if (!best || Math.abs(p.dist_m - lap.dist) < Math.abs(best.dist_m - lap.dist)) best = p;
+    }
+    if (!best || Math.abs(best.dist_m - lap.dist) > BRAKE_MATCH_M) return;
+    const key = `${lap.number}:${best.dist_m}`;      // 同一圈同一个弯只提示一次（点刹、补刹不重复响）
+    if (key === lastBrakeCue) return;
+    lastBrakeCue = key;
+    const diff = lap.dist - best.dist_m;             // 正 = 比 PB 晚刹
+    if (diff > BRAKE_TOL_M) { beep(BRAKE_LATE_HZ); beep(BRAKE_LATE_HZ, 0.15); }
+    else if (diff < -BRAKE_TOL_M) beep(BRAKE_EARLY_HZ);
+  }
+  function renderBrakeInfo() {
+    for (const b of document.querySelectorAll("#set-brake button")) b.classList.toggle("on", b.dataset.v === (settings.brakeCue ? "on" : "off"));
+    let hint = `和历史最快 PB 那圈同一个弯的刹车点比：早刹 ${BRAKE_TOL_M} m 以上低音一声，晚刹 ${BRAKE_TOL_M} m 以上高音两声，差不多就不响。`;
+    if (settings.brakeCue) {
+      if (brakeRef.lapId && !brakeRef.loading) hint += `当前基准：${brakeRef.label}，${brakeRef.points.length} 个刹车点。`;
+      else if (!brakeRef.lapId) hint += "还没有 PB：这条赛道 + 这台车存过完整圈之后才有。";
+      if (!audioCtx || audioCtx.state !== "running") hint += "刷新页面后要先点一下屏幕才能出声。";
+    }
+    setText($("brake-hint"), hint);
+  }
+  $("set-brake").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    settings.brakeCue = b.dataset.v === "on";
+    saveSettings();
+    if (settings.brakeCue && ensureAudio()) {
+      const ctx = audioCtx;     // 试听：先低音（早刹）再两声高音（晚刹）
+      (ctx.state === "running" ? Promise.resolve() : ctx.resume())
+        .then(() => { beep(BRAKE_EARLY_HZ); beep(BRAKE_LATE_HZ, 0.45); beep(BRAKE_LATE_HZ, 0.6); renderBrakeInfo(); })
+        .catch(() => renderBrakeInfo());
+    }
+    renderBrakeInfo();
   });
 
   function renderShiftInfo() {
