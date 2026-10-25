@@ -7,7 +7,17 @@ import sys
 from forza.__main__ import main
 
 
+def _utf8_stdio() -> None:
+    """输出被重定向（管道 / 文件）时 Windows 默认用 cp1252 / GBK 之类的编码，中文会直接 UnicodeEncodeError 崩掉。"""
+    for f in (sys.stdout, sys.stderr):
+        try:
+            f.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def run() -> int:
+    _utf8_stdio()
     argv = [a for a in sys.argv[1:] if a != "--no-pause"]
     lead = [a for a in argv[:1] if a in ("-v", "--verbose")]
     rest = argv[len(lead):]
