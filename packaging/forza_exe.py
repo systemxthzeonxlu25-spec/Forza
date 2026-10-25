@@ -3,6 +3,7 @@
 窗口是控制台程序，退出（或出错）时停一下，免得双击运行的人看不到提示就闪退。
 """
 import sys
+import traceback
 
 from forza.__main__ import main
 
@@ -32,6 +33,9 @@ def run() -> int:
         code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
     except KeyboardInterrupt:
         code = 0
+    except Exception:                        # config.toml 写坏、数据库打不开……：打印出来，别闪退
+        traceback.print_exc()
+        code = 1
     if sys.stdin and sys.stdin.isatty() and "--no-pause" not in sys.argv:
         try:
             input("\n按回车关闭窗口……")

@@ -1,5 +1,6 @@
 # PyInstaller 打包配置：pyinstaller packaging/forza.spec（在仓库根目录跑）
 # 出来的是 dist/Forza/ 文件夹（onedir：启动快，也不容易被杀毒软件误报），里面双击 Forza.exe。
+import shutil
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -9,7 +10,6 @@ ROOT = Path(SPECPATH).parent
 datas = [
     (str(ROOT / "web"), "web"),
     (str(ROOT / "forza" / "data"), "forza/data"),
-    (str(ROOT / "forza" / "tuning_rules.toml"), "forza"),
 ]
 # uvicorn 按名字动态加载协议 / 事件循环实现，静态分析找不到
 hidden = collect_submodules("uvicorn") + collect_submodules("forza")
@@ -33,3 +33,7 @@ exe = EXE(
     upx=False,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="Forza", upx=False)
+
+# 用户会改的文件放在 Forza.exe 旁边（不在 _internal 里）：调车阈值、配置示例
+for f in ("forza/tuning_rules.toml", "config.example.toml"):
+    shutil.copy2(ROOT / f, Path(DISTPATH) / "Forza")

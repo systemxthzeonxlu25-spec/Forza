@@ -10,11 +10,13 @@ on:
       - "packaging/**"
       - ".github/workflows/release.yml"
       - "forza/config.py"
+      - "forza/tuning/rules.py"
       - "requirements.txt"
   workflow_dispatch:
 
+# 打包这一步会执行仓库里的代码（PR 的代码也算），只给读权限；发 Release 在单独的 job 里才给写权限
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows-exe:
@@ -22,6 +24,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -48,6 +52,8 @@ jobs:
             $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8131$u"
             if ($r.StatusCode -ne 200) { Stop-Process -Id $p.Id -Force; throw "$u 返回 $($r.StatusCode)" }
           }
+          $rules = (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8131/api/tuning/rules).Content | ConvertFrom-Json
+          if ($rules.source -match "_internal" -or $rules.error) { Stop-Process -Id $p.Id -Force; throw "调车阈值没从 exe 旁边读：$($rules.source) $($rules.error)" }
           Stop-Process -Id $p.Id -Force
           Start-Sleep -Seconds 2
           Remove-Item -Recurse -Force "$dir/data", "$dir/smoke.frec", "$dir/smoke.truth.json" -ErrorAction SilentlyContinue
@@ -55,7 +61,7 @@ jobs:
       - name: 打 zip
         shell: pwsh
         run: |
-          Copy-Item config.example.toml, README.md dist/Forza/
+          Copy-Item README.md dist/Forza/
           $name = if ($env:GITHUB_REF_TYPE -eq "tag") { "Forza-$env:GITHUB_REF_NAME-windows" } else { "Forza-dev-windows" }
           Compress-Archive -Path dist/Forza -DestinationPath "$name.zip"
           "ZIP=$name.zip" >> $env:GITHUB_ENV
@@ -65,9 +71,17 @@ jobs:
           name: forza-windows
           path: ${{ env.ZIP }}
 
-      - name: 发 Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+  publish:
+    needs: windows-exe
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: ${{ env.ZIP }}
+          name: forza-windows
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Forza-*-windows.zip
           generate_release_notes: true
