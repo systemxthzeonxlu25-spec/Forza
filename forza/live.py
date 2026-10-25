@@ -87,7 +87,9 @@ compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十
       "ref_time": 81.5, "delta": 0.3, "predicted": 81.8,
       "lap_id": 12, "track_id": 3, "car_pi": 800,
       "pi_match": true,          # false = PB 是别的 PI（改装）跑的
-      "dist": 1234.5 | null,     # 按 PB 那圈对齐的本圈距离 m（刹车点提示用，和 PB 的距离口径一致）
+      "dist": 1234.5 | null,     # 按 PB 那圈对齐的本圈距离 m
+      "brake_ref": null | {"lap_id": 12, "ref_time": 81.5, "dist": 1234.5},  # 刹车点提示的基准：存档里最快的那圈 +
+                                 # 按它对齐的本圈距离（PB 是本场还没存的圈时也给，用上一个存档 PB）
       "source": "db" | "session" # session = 本场刚跑的圈比数据库里的还快（还没存库，lap_id 为 null）
     },
     "race_time": 300.1, "position": 3
@@ -726,7 +728,13 @@ class LiveBroadcaster:
             "car_pi": res.get("car_pi") if source == "db" else (int(fr.car_pi) if fr.car_pi else None),
             "pi_match": bool(res.get("pi_match", True)) if source == "db" else True,
             "dist": dist,
+            "brake_ref": None,
         }
+        if res.get("state") == "ok" and res.get("lap_id") is not None:
+            # 刹车点提示的基准永远是存档的 PB 圈（有 lap_id 才拉得到刹车点）；本场更快的圈还没存时也用它，
+            # 距离要按它自己的口径对齐（两圈一个用游戏距离、一个用积分距离时不能混用）
+            bd = dist if source == "db" else self._delta_vs(res["rd"], res["rt"], res["integrated"], lap_t, d_field, d_int)[0]
+            out["brake_ref"] = {"lap_id": res["lap_id"], "ref_time": _r(res["lap_time"], 3), "dist": _r(bd, 1)}
         return out
 
     def _pb_job(self, key: tuple, q: dict) -> None:

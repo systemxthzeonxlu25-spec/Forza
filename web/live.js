@@ -865,22 +865,21 @@
   });
 
   // ======================= 刹车点提示（基准 = 历史最快 PB 那圈） =======================
-  // 基准圈的每个弯的刹车起点从 /api/laps/{id}/brake_points 拿（距离口径和那圈存档的 dist 一样，
-  // 和实时差距用的本圈距离 lap.dist 是同一套）。没有 PB（还没存过这条赛道 + 这台车的完整圈）就不提示。
-  // PB 是本场刚跑、还没存库的圈（source = session，没有 lap_id）时，接着用同一条赛道上一个存档 PB 的刹车点。
+  // 基准圈的每个弯的刹车起点从 /api/laps/{id}/brake_points 拿（距离口径和那圈存档的 dist 一样）。
+  // 没有 PB（还没存过这条赛道 + 这台车的完整圈）就不提示。
+  // 后端的 lap.pb.brake_ref 给出存档 PB 那圈的 id 和按它对齐的本圈距离；PB 是本场刚跑、还没存库的圈时也照样给。
   const BRAKE_RETRY_MS = 5000;
-  const brakeRef = { lapId: null, trackId: null, points: [], loading: false, label: "", retryAt: 0 };
+  const brakeRef = { lapId: null, points: [], loading: false, label: "", retryAt: 0 };
   let wasBraking = false, lastBrakeCue = "";
-  async function loadBrakeRef(lapId, trackId, label) {
+  async function loadBrakeRef(lapId, label) {
     brakeRef.loading = true;
     brakeRef.lapId = lapId;
-    brakeRef.trackId = trackId;
     const r = await getJSON(`/api/laps/${lapId}/brake_points`);
     if (brakeRef.lapId !== lapId) return;            // 拉的过程中基准又换了
     brakeRef.loading = false;
     if (!(r.ok && r.data && Array.isArray(r.data.points))) {
       // 拉失败（网络抖一下）：清掉基准，过几秒再试，别一直哑着到换 PB / 刷新
-      Object.assign(brakeRef, { lapId: null, trackId: null, points: [], retryAt: Date.now() + BRAKE_RETRY_MS });
+      Object.assign(brakeRef, { lapId: null, points: [], retryAt: Date.now() + BRAKE_RETRY_MS });
       renderBrakeInfo();
       return;
     }
@@ -892,14 +891,11 @@
     const braking = num(f.brake) && f.brake >= BRAKE_ON;
     const onset = braking && !wasBraking;
     wasBraking = braking;
-    const pb = lap && lap.pb && lap.pb.state === "ok" ? lap.pb : null;
+    const ref = lap && lap.pb && lap.pb.state === "ok" && lap.pb.brake_ref && lap.pb.brake_ref.lap_id ? lap.pb.brake_ref : null;
     if (!settings.brakeCue) return;
-    if (pb && pb.lap_id && pb.lap_id !== brakeRef.lapId && Date.now() >= brakeRef.retryAt) loadBrakeRef(pb.lap_id, pb.track_id, `PB ${Forza.fmtLap(pb.ref_time)}`);
-    const usable = pb && !brakeRef.loading && brakeRef.lapId &&
-      (pb.lap_id ? brakeRef.lapId === pb.lap_id : pb.track_id != null && brakeRef.trackId === pb.track_id);
-    // 存档 PB：用按 PB 那圈对齐的距离（和刹车点同一口径）；本场 PB 时按本圈距离
-    const dist = pb && pb.lap_id && num(pb.dist) ? pb.dist : lap.dist;
-    if (!onset || !usable || lap.first_lap || !num(dist)) return;
+    if (ref && ref.lap_id !== brakeRef.lapId && Date.now() >= brakeRef.retryAt) loadBrakeRef(ref.lap_id, `PB ${Forza.fmtLap(ref.ref_time)}`);
+    const dist = ref ? ref.dist : null;              // 按基准圈自己的距离口径对齐的本圈距离
+    if (!onset || !ref || brakeRef.loading || brakeRef.lapId !== ref.lap_id || lap.first_lap || !num(dist)) return;
     let best = null;
     for (const p of brakeRef.points) {
       if (!best || Math.abs(p.dist_m - dist) < Math.abs(best.dist_m - dist)) best = p;

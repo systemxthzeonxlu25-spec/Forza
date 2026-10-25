@@ -72,6 +72,7 @@ MAX_DIAG_LAPS = 8            # 诊断对比每个版本最多诊断最近这么�
 LIST_LAP_LIMIT = 5000
 # “像是换了改装”要看的字段：(字段, 中文名)
 CAR_FIELDS = (("car_pi", "PI"), ("engine_max_rpm", "最高转速"), ("num_cylinders", "气缸数"))
+SECTOR_MAX_LAPS = 30         # 逐弯对比每边最多读这么多圈的采样（最近的）
 UNTAGGED_ID = 0              # 版本对比里代表“没记版本的圈”（setup_id 为空）
 UNTAGGED_NAME = "没记版本的圈"
 ONE_CHANGE_TIP = "建议一次只改一项，改完记一个新版本、跑 5 圈以上再对比，这样才知道是哪一项起的作用。"
@@ -482,9 +483,9 @@ def _sector_compare(store, track_id: int, A: dict, B: dict, laps: list[dict]) ->
 
     def side_times(side: dict) -> list[list[float]]:
         out = []
-        for r in side["laps"]:
-            if r["outlier"] or r["id"] not in meta:
-                continue
+        rows = [r for r in side["laps"] if not r["outlier"] and r["id"] in meta]
+        # 每圈都要解压整圈采样，圈多的车只取最近 SECTOR_MAX_LAPS 圈（中位数早就稳了）
+        for r in sorted(rows, key=lambda r: r["id"], reverse=True)[:SECTOR_MAX_LAPS]:
             st = _lap_stats(store, meta[r["id"]], layout)
             ts = st and st.get("times")
             if ts and len(ts) == n_sec and all(math.isfinite(x) and x > 0 for x in ts):
