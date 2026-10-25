@@ -1262,10 +1262,12 @@
   // ------------------------------------------------------------------ 进步曲线
   // 这条赛道 + 这台车的完整圈按天分组（不看调校筛选：要看的就是长期进步）。
   // 每天：最快圈、中位数（不算起步圈，起步圈天生慢）、圈数；历史 PB = 到那天为止的最快圈。
+  // 导入 / 回放录像的圈不算：它们的 created_at 是导入那天，不是真的跑圈那天
+  const isImportedLap = (l) => /^(import|replay):/.test(l.session_source || "");
   function progressDays() {
     const days = new Map();
     for (const l of lapsOfTrackCar()) {
-      if (!l.is_complete || !(l.lap_time > 0) || !l.created_at) continue;
+      if (!l.is_complete || !(l.lap_time > 0) || !l.created_at || isImportedLap(l)) continue;
       const day = String(l.created_at).slice(0, 10);
       if (!days.has(day)) days.set(day, []);
       days.get(day).push(l);
@@ -1289,7 +1291,8 @@
     if (!days.length) return;
     const laps = days.reduce((a, d) => a + d.n, 0);
     const first = days[0], last = days[days.length - 1];
-    $("#prog-sub").textContent = `练了 ${days.length} 天、${laps} 个完整圈`;
+    const imported = lapsOfTrackCar().filter((l) => l.is_complete && isImportedLap(l)).length;
+    $("#prog-sub").textContent = `练了 ${days.length} 天、${laps} 个完整圈` + (imported ? `（导入 / 回放的 ${imported} 圈不算，分不出是哪天跑的）` : "");
     if (days.length < 2) {
       body.innerHTML = `<p class="muted small">目前只有 ${esc(first.day)} 一天的数据（最快 ${esc(F.fmtLap(first.best))}）。换一天再来跑，这里就会画出每天的进步。</p>`;
       return;

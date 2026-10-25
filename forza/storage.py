@@ -92,9 +92,10 @@ _META_SELECT = (
     "l.id, l.session_id, l.track_id, l.game, l.family, l.fmt, l.car_ordinal, l.car_class, "
     "l.car_pi, l.lap_number, l.kind, l.lap_time, l.time_source, l.distance_m, l.max_speed, "
     "l.is_complete, l.flags, l.meta, l.note, l.sample_count, l.created_at, "
-    "t.name AS track_name, c.name AS car_name "
+    "t.name AS track_name, c.name AS car_name, s.source AS session_source "
     "FROM laps l LEFT JOIN tracks t ON t.id = l.track_id "
-    "LEFT JOIN cars c ON c.game = l.game AND c.car_ordinal = l.car_ordinal"
+    "LEFT JOIN cars c ON c.game = l.game AND c.car_ordinal = l.car_ordinal "
+    "LEFT JOIN sessions s ON s.id = l.session_id"
 )
 
 # 赛道指纹匹配阈值

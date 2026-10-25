@@ -33,7 +33,9 @@ import threading
 import time
 from collections import OrderedDict
 
-from .util import now_iso, parse_flags
+from datetime import datetime
+
+from .util import is_imported_lap, now_iso, parse_flags
 
 log = logging.getLogger(__name__)
 
@@ -458,7 +460,7 @@ def _side(setup: dict, laps: list[dict], track_id: int | None) -> dict:
 
 
 def _untagged(other: dict) -> dict:
-    """“没记版本的圈”当成一个虚拟版本（id = UNTAGGED_ID）：第一次记版本之前跑的圈都在这里，正好当改之前的基线。"""
+    """“没记版本的圈”当成一个虚拟版本（id = UNTAGGED_ID）：第一次记版本之前自己跑的圈（见 _untagged_laps），当改之前的基线。"""
     return {"id": UNTAGGED_ID, "game": other["game"], "car_ordinal": other["car_ordinal"], "car_pi": None,
             "name": UNTAGGED_NAME, "note": None, "created_at": None}
 
@@ -510,6 +512,35 @@ def _sector_compare(store, track_id: int, A: dict, B: dict, laps: list[dict]) ->
     return {"laps": {"a": len(ta), "b": len(tb)}, "sectors": rows}
 
 
+def _lap_epoch(lap: dict) -> float | None:
+    """这圈跑完的时刻（epoch 秒）：meta 里的 ended_epoch，老数据没有就用 created_at（本地时间）。"""
+    e = lap.get("ended_epoch")
+    if isinstance(e, (int, float)):
+        return float(e)
+    try:
+        return datetime.fromisoformat(str(lap.get("created_at"))).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _untagged_laps(store, car_laps: list[dict], game: str, car_ordinal: int) -> list[dict]:
+    """“没记版本的圈”= 这台车第一次设当前版本之前跑的、自己录的圈。
+    导入 / 回放的圈也没有 setup_id，但不知道当时是哪套调校，不能当“改之前”；
+    第一次设版本之后还没 setup_id 的圈（比如中途清了当前版本）也不算基线。"""
+    row = store.query("SELECT MIN(at) AS m FROM setup_activations WHERE game=? AND car_ordinal=?",
+                      (game, car_ordinal))
+    first = row[0]["m"] if row else None
+    out = []
+    for l in car_laps:
+        if l.get("setup_id") or is_imported_lap(l):
+            continue
+        ep = _lap_epoch(l)
+        if first is not None and (ep is None or ep >= first):
+            continue
+        out.append(l)
+    return out
+
+
 def compare_setups(store, a_id: int, b_id: int, track_id: int | None = None) -> dict:
     """版本 A（参考）对比版本 B。delta_median_s = B 中位数 − A 中位数（负 = B 快）。
     a_id / b_id 可以是 UNTAGGED_ID（0）= 这台车没记版本的圈（另一边必须是真实版本，用它确定是哪台车）。
@@ -531,8 +562,10 @@ def compare_setups(store, a_id: int, b_id: int, track_id: int | None = None) -> 
     if (sa["game"], sa["car_ordinal"]) != (sb["game"], sb["car_ordinal"]):
         raise SetupError("两个版本不是同一台车，没法比")
     car_laps = _car_laps(store, sa["game"], sa["car_ordinal"])
-    laps_a = [l for l in car_laps if (l.get("setup_id") or UNTAGGED_ID) == a_id]
-    laps_b = [l for l in car_laps if (l.get("setup_id") or UNTAGGED_ID) == b_id]
+    untagged = (_untagged_laps(store, car_laps, sa["game"], sa["car_ordinal"])
+                if UNTAGGED_ID in (a_id, b_id) else [])
+    laps_a = untagged if a_id == UNTAGGED_ID else [l for l in car_laps if l.get("setup_id") == a_id]
+    laps_b = untagged if b_id == UNTAGGED_ID else [l for l in car_laps if l.get("setup_id") == b_id]
     tid = _pick_track(laps_a, laps_b, track_id)
     A, B = _side(sa, laps_a, tid), _side(sb, laps_b, tid)
     track_name = next((l.get("track_name") for l in laps_a + laps_b if l.get("track_id") == tid), None)

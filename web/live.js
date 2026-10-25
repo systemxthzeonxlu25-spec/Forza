@@ -867,11 +867,13 @@
   // ======================= 刹车点提示（基准 = 历史最快 PB 那圈） =======================
   // 基准圈的每个弯的刹车起点从 /api/laps/{id}/brake_points 拿（距离口径和那圈存档的 dist 一样，
   // 和实时差距用的本圈距离 lap.dist 是同一套）。没有 PB（还没存过这条赛道 + 这台车的完整圈）就不提示。
-  const brakeRef = { lapId: null, points: [], loading: false, label: "" };
+  // PB 是本场刚跑、还没存库的圈（source = session，没有 lap_id）时，接着用同一条赛道上一个存档 PB 的刹车点。
+  const brakeRef = { lapId: null, trackId: null, points: [], loading: false, label: "" };
   let wasBraking = false, lastBrakeCue = "";
-  async function loadBrakeRef(lapId, label) {
+  async function loadBrakeRef(lapId, trackId, label) {
     brakeRef.loading = true;
     brakeRef.lapId = lapId;
+    brakeRef.trackId = trackId;
     const r = await getJSON(`/api/laps/${lapId}/brake_points`);
     if (brakeRef.lapId !== lapId) return;            // 拉的过程中基准又换了
     brakeRef.loading = false;
@@ -883,19 +885,23 @@
     const braking = num(f.brake) && f.brake >= BRAKE_ON;
     const onset = braking && !wasBraking;
     wasBraking = braking;
-    const pb = lap && lap.pb && lap.pb.state === "ok" && lap.pb.lap_id ? lap.pb : null;
+    const pb = lap && lap.pb && lap.pb.state === "ok" ? lap.pb : null;
     if (!settings.brakeCue) return;
-    if (pb && pb.lap_id !== brakeRef.lapId) loadBrakeRef(pb.lap_id, `PB ${Forza.fmtLap(pb.ref_time)}`);
-    if (!onset || !pb || brakeRef.loading || brakeRef.lapId !== pb.lap_id || lap.first_lap || !num(lap.dist)) return;
+    if (pb && pb.lap_id && pb.lap_id !== brakeRef.lapId) loadBrakeRef(pb.lap_id, pb.track_id, `PB ${Forza.fmtLap(pb.ref_time)}`);
+    const usable = pb && !brakeRef.loading && brakeRef.lapId &&
+      (pb.lap_id ? brakeRef.lapId === pb.lap_id : pb.track_id != null && brakeRef.trackId === pb.track_id);
+    // 存档 PB：用按 PB 那圈对齐的距离（和刹车点同一口径）；本场 PB 时按本圈距离
+    const dist = pb && pb.lap_id && num(pb.dist) ? pb.dist : lap.dist;
+    if (!onset || !usable || lap.first_lap || !num(dist)) return;
     let best = null;
     for (const p of brakeRef.points) {
-      if (!best || Math.abs(p.dist_m - lap.dist) < Math.abs(best.dist_m - lap.dist)) best = p;
+      if (!best || Math.abs(p.dist_m - dist) < Math.abs(best.dist_m - dist)) best = p;
     }
-    if (!best || Math.abs(best.dist_m - lap.dist) > BRAKE_MATCH_M) return;
+    if (!best || Math.abs(best.dist_m - dist) > BRAKE_MATCH_M) return;
     const key = `${lap.number}:${best.dist_m}`;      // 同一圈同一个弯只提示一次（点刹、补刹不重复响）
     if (key === lastBrakeCue) return;
     lastBrakeCue = key;
-    const diff = lap.dist - best.dist_m;             // 正 = 比 PB 晚刹
+    const diff = dist - best.dist_m;             // 正 = 比 PB 晚刹
     if (diff > BRAKE_TOL_M) { beep(BRAKE_LATE_HZ); beep(BRAKE_LATE_HZ, 0.15); }
     else if (diff < -BRAKE_TOL_M) beep(BRAKE_EARLY_HZ);
   }

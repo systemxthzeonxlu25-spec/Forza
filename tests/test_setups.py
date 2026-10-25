@@ -193,6 +193,22 @@ def test_compare_against_untagged_laps(store):
         su.compare_setups(store, su.UNTAGGED_ID, 999)
 
 
+def test_untagged_baseline_only_own_laps_before_first_version(store):
+    """基线只要第一次设版本之前自己跑的圈：导入 / 回放的圈、设过版本之后又没标签的圈都不算。"""
+    t0 = time.time()
+    _add_laps(store, None, [100.0, 100.2, 99.8], ended_epoch=t0 - 100)
+    sid = store.create_session("fm2023", "fm2023_dash", "import:old.frec", 2240, 1)
+    _add_laps(store, None, [90.0, 90.1, 90.2], ended_epoch=t0 - 50, session_id=sid)   # 导入：不知道当时什么调校
+    b = su.create_setup(store, name="B", **CAR)
+    su.activate(store, b["id"], at=t0)
+    _add_laps(store, b["id"], [99.5, 99.7, 99.3], ended_epoch=t0 + 10)
+    _add_laps(store, None, [80.0, 80.1, 80.2], ended_epoch=t0 + 20)                     # 设过版本之后的空标签圈
+    lap = next(l for l in store.list_laps(**CAR) if l.get("session_id") == sid)
+    assert lap["session_source"] == "import:old.frec"
+    r = su.compare_setups(store, su.UNTAGGED_ID, b["id"])
+    assert r["a"]["n"] == 3 and r["a"]["median_time"] == pytest.approx(100.0)
+
+
 def test_upgrade_hints(store):
     a = su.create_setup(store, name="A", car_pi=750, engine_max_rpm=8000.0, num_cylinders=8, **CAR)
     assert su.car_hints(a, {"car_pi": 750, "engine_max_rpm": 8000.0, "num_cylinders": 8}) == []

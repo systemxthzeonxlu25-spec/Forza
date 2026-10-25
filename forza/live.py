@@ -87,7 +87,8 @@ compare 按圈长等比例缩放距离，起步圈的每个弯都会错开几十
       "ref_time": 81.5, "delta": 0.3, "predicted": 81.8,
       "lap_id": 12, "track_id": 3, "car_pi": 800,
       "pi_match": true,          # false = PB 是别的 PI（改装）跑的
-      "source": "db" | "session" # session = 本场刚跑的圈比数据库里的还快
+      "dist": 1234.5 | null,     # 按 PB 那圈对齐的本圈距离 m（刹车点提示用，和 PB 的距离口径一致）
+      "source": "db" | "session" # session = 本场刚跑的圈比数据库里的还快（还没存库，lap_id 为 null）
     },
     "race_time": 300.1, "position": 3
   },
@@ -591,8 +592,8 @@ class LiveBroadcaster:
                 pb = {"state": "none", "reason": "查询 PB 出错"}
             if dist is None and pb and pb.get("dist") is not None:
                 dist = pb["dist"]
-            if pb:
-                pb.pop("dist", None)
+            if pb and "dist" in pb:
+                pb["dist"] = _r(pb["dist"], 1)
 
         best = _pos(fr.best_lap) or (_r(ev.best_time, 3) if ev and ev.best_time else None) or _r(ref_time, 3)
         return {
