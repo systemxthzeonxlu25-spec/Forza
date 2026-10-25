@@ -20,6 +20,7 @@
   };
   const GRID = cssVar("--grid", "rgba(255,255,255,0.06)");
   const num = (v) => typeof v === "number" && isFinite(v);
+  const UNTAGGED_ID = 0;          // 版本对比里代表“没记版本的圈”（和 forza/setups.py 的 UNTAGGED_ID 一致）
   const fmtS = (v, d = 3) => (num(v) ? v.toFixed(d) : "--");
   const fmtInt = (v) => (num(v) ? String(Math.round(v)) : "--");
   const fmtDate = (s) => (s ? s.slice(5, 16).replace("T", " ") : "");
@@ -238,24 +239,28 @@
   // ------------------------------------------------------------------ 版本对比
   function renderCompareForm() {
     const list = S.setups;
-    show($("#sec-compare"), list.length >= 2);
-    if (list.length < 2) return;
+    // 只有一个版本也能比：和“没记版本的圈”（第一次记版本之前跑的，id = 0）比，正好是改之前的基线
+    show($("#sec-compare"), list.length >= 1);
+    if (!list.length) return;
     const selA = $("#cmp-a"), selB = $("#cmp-b");
     const prevA = selA.value, prevB = selB.value;
     const opt = (s) => `<option value="${s.id}">${esc(s.name)}（${s.flying_laps} 圈）</option>`;
-    selA.innerHTML = list.map(opt).join("");
-    selB.innerHTML = list.map(opt).join("");
-    // 默认：B = 当前版本（没有就最新的），A = 它前面那个版本
+    const untagged = `<option value="${UNTAGGED_ID}">没记版本的圈（改之前）</option>`;
+    selA.innerHTML = list.map(opt).join("") + untagged;
+    selB.innerHTML = list.map(opt).join("") + untagged;
+    const has = (v) => v === String(UNTAGGED_ID) || list.some((s) => String(s.id) === v);
+    // 默认：B = 当前版本（没有就最新的），A = 它前面那个版本（没有就是没记版本的圈）
     const bDef = list.find((s) => s.is_current) || list[0];
     const aDef = list[list.indexOf(bDef) + 1] || list.find((s) => s !== bDef);
-    selB.value = list.some((s) => String(s.id) === prevB) ? prevB : String(bDef.id);
-    selA.value = list.some((s) => String(s.id) === prevA) ? prevA : String(aDef.id);
+    selB.value = has(prevB) ? prevB : String(bDef.id);
+    selA.value = has(prevA) ? prevA : String(aDef ? aDef.id : UNTAGGED_ID);
     selA.onchange = selB.onchange = renderTrackOptions;
     renderTrackOptions();
   }
 
   function renderTrackOptions() {
     const ids = [Number($("#cmp-a").value), Number($("#cmp-b").value)];
+    const need = ids.filter((id) => id !== UNTAGGED_ID).length;   // 没记版本的圈跑过哪些赛道不知道：只看真实版本那边
     const tracks = new Map();
     for (const s of S.setups.filter((x) => ids.includes(x.id))) {
       for (const t of s.tracks || []) {
@@ -267,7 +272,7 @@
     }
     const sel = $("#cmp-track");
     const prev = sel.value;
-    const common = [...tracks.values()].filter((t) => t.both === 2);
+    const common = [...tracks.values()].filter((t) => t.both === need);
     sel.innerHTML = `<option value="">自动（两个版本都跑过的赛道）</option>` +
       common.map((t) => `<option value="${t.track_id}">${esc(t.track_name || `赛道 #${t.track_id}`)}</option>`).join("");
     if (common.some((t) => String(t.track_id) === prev)) sel.value = prev;
@@ -331,8 +336,11 @@
     const cell = (x, n) => `${x.laps_with}/${n}`;
     const tot = (x) => (num(x.total_s) ? `${x.total_s.toFixed(2)} s` : "");
     const chg = { fewer: `<span class="chg-fewer">B 少了</span>`, more: `<span class="chg-more">B 多了</span>`, same: `<span class="muted">一样</span>` };
-    const rows = c.findings_by_id.map((f) => `<tr>
-      <td class="wrap">${esc(f.title)} <span class="muted">${esc(f.category_label || "")}</span></td>
+    // 调车诊断页“照这条改了”记的版本，说明是“针对诊断：<标题>”：把这一行标出来，一眼看它少没少
+    const PFX = "针对诊断：";
+    const target = (c.b.note || "").startsWith(PFX) ? c.b.note.slice(PFX.length) : null;
+    const rows = c.findings_by_id.map((f) => `<tr${f.title === target ? ` class="target"` : ""}>
+      <td class="wrap">${esc(f.title)} <span class="muted">${esc(f.category_label || "")}</span>${f.title === target ? ` <span class="badge-target">这次针对的</span>` : ""}</td>
       <td class="num">${cell(f.a, na)}</td><td class="num">${tot(f.a)}</td>
       <td class="num">${cell(f.b, nb)}</td><td class="num">${tot(f.b)}</td>
       <td>${chg[f.change] || ""}</td></tr>`).join("");

@@ -101,6 +101,8 @@ button[disabled] { opacity: .6; cursor: progress; }
 .car-page td.num, .car-page th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .car-page tr.dim td { color: var(--muted); }
 .chg-fewer { color: var(--gain); }
+tr.target td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.badge-target { font-size: 11px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent-text, var(--accent)); white-space: nowrap; }
 .chg-more { color: var(--bad); }
 .flag { font-size: 11px; color: var(--warn); margin-left: 4px; }
 .notes { margin: 10px 0 0; padding-left: 20px; color: var(--muted); }

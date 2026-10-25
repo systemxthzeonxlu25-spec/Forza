@@ -21,7 +21,7 @@ Data Out 里没有任何调校数值，所以“版本”只是用户手填的�
     update_setup(store, setup_id, name=None, note=None) / activate(store, setup_id)
     get_setup(store, setup_id) / current_setup(store, game, car_ordinal) / setup_at(store, game, car_ordinal, at)
     list_setups(store, game=None, car_ordinal=None)   带圈数、最快、中位数、标准差
-    compare_setups(store, a_id, b_id, track_id=None)  版本对比
+    compare_setups(store, a_id, b_id, track_id=None)  版本对比（一边可以是 UNTAGGED_ID = 没记版本的圈）
     car_hints(setup, observed)                    “像是换了改装”的提示
 """
 from __future__ import annotations
@@ -70,6 +70,8 @@ MAX_DIAG_LAPS = 8            # 诊断对比每个版本最多诊断最近这么�
 LIST_LAP_LIMIT = 5000
 # “像是换了改装”要看的字段：(字段, 中文名)
 CAR_FIELDS = (("car_pi", "PI"), ("engine_max_rpm", "最高转速"), ("num_cylinders", "气缸数"))
+UNTAGGED_ID = 0              # 版本对比里代表“没记版本的圈”（setup_id 为空）
+UNTAGGED_NAME = "没记版本的圈"
 ONE_CHANGE_TIP = "建议一次只改一项，改完记一个新版本、跑 5 圈以上再对比，这样才知道是哪一项起的作用。"
 
 
@@ -455,22 +457,34 @@ def _side(setup: dict, laps: list[dict], track_id: int | None) -> dict:
             "car_values": _lap_car_values(flying)}
 
 
+def _untagged(other: dict) -> dict:
+    """“没记版本的圈”当成一个虚拟版本（id = UNTAGGED_ID）：第一次记版本之前跑的圈都在这里，正好当改之前的基线。"""
+    return {"id": UNTAGGED_ID, "game": other["game"], "car_ordinal": other["car_ordinal"], "car_pi": None,
+            "name": UNTAGGED_NAME, "note": None, "created_at": None}
+
+
 def compare_setups(store, a_id: int, b_id: int, track_id: int | None = None) -> dict:
     """版本 A（参考）对比版本 B。delta_median_s = B 中位数 − A 中位数（负 = B 快）。
+    a_id / b_id 可以是 UNTAGGED_ID（0）= 这台车没记版本的圈（另一边必须是真实版本，用它确定是哪台车）。
 
     verdict："faster" = B 比 A 快、"slower" = B 比 A 慢、"noise" = 差别在噪音内（或圈数不够，enough_laps=false）。
     """
     ensure_schema(store)
-    sa, sb = _row(store, a_id), _row(store, b_id)
-    if sa is None or sb is None:
-        raise SetupError(f"调校版本 #{a_id if sa is None else b_id} 不存在")
     if a_id == b_id:
         raise SetupError("选两个不同的版本来比")
+    sa = _row(store, a_id) if a_id != UNTAGGED_ID else None
+    sb = _row(store, b_id) if b_id != UNTAGGED_ID else None
+    if a_id == UNTAGGED_ID and sb is not None:
+        sa = _untagged(sb)
+    if b_id == UNTAGGED_ID and sa is not None:
+        sb = _untagged(sa)
+    if sa is None or sb is None:
+        raise SetupError(f"调校版本 #{a_id if sa is None else b_id} 不存在")
     if (sa["game"], sa["car_ordinal"]) != (sb["game"], sb["car_ordinal"]):
         raise SetupError("两个版本不是同一台车，没法比")
     car_laps = _car_laps(store, sa["game"], sa["car_ordinal"])
-    laps_a = [l for l in car_laps if l.get("setup_id") == a_id]
-    laps_b = [l for l in car_laps if l.get("setup_id") == b_id]
+    laps_a = [l for l in car_laps if (l.get("setup_id") or UNTAGGED_ID) == a_id]
+    laps_b = [l for l in car_laps if (l.get("setup_id") or UNTAGGED_ID) == b_id]
     tid = _pick_track(laps_a, laps_b, track_id)
     A, B = _side(sa, laps_a, tid), _side(sb, laps_b, tid)
     track_name = next((l.get("track_name") for l in laps_a + laps_b if l.get("track_id") == tid), None)

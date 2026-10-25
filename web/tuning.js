@@ -441,10 +441,41 @@
 
     card.appendChild(el("h4", "", "可以试试（常见调整方向）"));
     const ol = el("ol", "fd-tips");
-    for (const s of f.suggestions || []) ol.appendChild(el("li", "", s));
+    const lap = res.lap && res.lap.id ? lapById(res.lap.id) : null;
+    for (const s of f.suggestions || []) {
+      const li = el("li", "", s);
+      if (canRecord(lap) && !/^先排除驾驶/.test(s)) li.appendChild(tryButton(s, f, lap));
+      ol.appendChild(li);
+    }
     card.appendChild(ol);
     if (f.caveat) card.appendChild(el("p", "muted fd-caveat", f.caveat));
     return card;
+  }
+
+  // “照这条改了”：在游戏里按某条建议改完调校后，一键记成新的调校版本（名字预填成这条建议）。
+  // 之后存的圈归到新版本；车辆调校页的版本对比会告诉你圈速变没变、这项问题是不是少了。
+  function canRecord(lap) {
+    return !!(lap && lap.game && lap.car_ordinal !== null && lap.car_ordinal !== undefined);
+  }
+  function tryButton(text, f, lap) {
+    const b = el("button", "fd-try", "照这条改了");
+    b.type = "button";
+    b.title = "在游戏里改完之后点：记成一个新的调校版本，之后跑的圈都归到它，方便和改之前对比";
+    b.addEventListener("click", async () => {
+      const name = window.prompt("新调校版本的名字（改了什么，写具体点更好，比如“前防倾杆 30 → 27”）：", text.slice(0, 60));
+      if (name === null || !name.trim()) return;
+      b.disabled = true;
+      try {
+        await F.api("/api/setups", { method: "POST", body: {
+          game: lap.game, car_ordinal: lap.car_ordinal, name: name.trim().slice(0, 60),
+          note: `针对诊断：${f.title}`.slice(0, 300) } });
+        b.replaceWith(el("span", "fd-try-ok", "已记成新版本。跑 5 圈以上，再到“车辆调校”页和改之前的版本对比"));
+      } catch (e) {
+        b.disabled = false;
+        alert(`没记上：${e.message}`);
+      }
+    });
+    return b;
   }
 
   function renderChecks(res) {

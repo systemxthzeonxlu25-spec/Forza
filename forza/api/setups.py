@@ -119,9 +119,11 @@ def create_setup(request: Request, body: SetupBody):
 
 @router.get("/setups/compare")
 def compare_setups(request: Request, a: int, b: int, track_id: int | None = None):
+    """a / b 其中一个可以是 0（su.UNTAGGED_ID）= 这台车没记版本的圈，当改之前的基线。"""
     store = _rt(request).store
-    _setup_or_404(store, a)
-    _setup_or_404(store, b)
+    for sid in (a, b):
+        if sid != su.UNTAGGED_ID:
+            _setup_or_404(store, sid)
     try:
         return su.compare_setups(store, a, b, track_id)
     except su.SetupError as e:

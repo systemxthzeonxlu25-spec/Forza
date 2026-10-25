@@ -178,6 +178,21 @@ def test_compare_verdicts_standard_error(store):
         su.compare_setups(store, a["id"], a["id"])
 
 
+def test_compare_against_untagged_laps(store):
+    """第一次记版本之前跑的圈（setup_id 为空）可以当“改之前”的基线来比（调车诊断页“照这条改了”之后最常见）。"""
+    _add_laps(store, None, [100.0, 100.2, 99.8, 100.1, 99.9])
+    b = su.create_setup(store, name="前防倾杆调软一点", **CAR)
+    _add_laps(store, b["id"], [99.5, 99.7, 99.3, 99.6, 99.4])
+    r = su.compare_setups(store, su.UNTAGGED_ID, b["id"])
+    assert r["a"]["name"] == su.UNTAGGED_NAME and r["a"]["n"] == 5 and r["b"]["n"] == 5
+    assert r["delta_median_s"] == pytest.approx(-0.5) and r["verdict"] == "faster"
+    assert su.compare_setups(store, b["id"], su.UNTAGGED_ID)["verdict"] == "slower"
+    with pytest.raises(su.SetupError):
+        su.compare_setups(store, su.UNTAGGED_ID, su.UNTAGGED_ID)
+    with pytest.raises(su.SetupError):
+        su.compare_setups(store, su.UNTAGGED_ID, 999)
+
+
 def test_upgrade_hints(store):
     a = su.create_setup(store, name="A", car_pi=750, engine_max_rpm=8000.0, num_cylinders=8, **CAR)
     assert su.car_hints(a, {"car_pi": 750, "engine_max_rpm": 8000.0, "num_cylinders": 8}) == []

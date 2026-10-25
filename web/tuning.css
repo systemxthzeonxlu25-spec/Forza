@@ -118,6 +118,8 @@
 .fd-basis dt { color: var(--muted); font-size: 12px; margin-top: 8px; }
 .fd-basis dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 .fd-caveat { font-size: 13px; margin: 8px 0 0; }
+.fd-try { font-size: 12px; padding: 1px 8px; margin-left: 8px; border-radius: 999px; vertical-align: 1px; }
+.fd-try-ok { display: block; font-size: 12px; color: var(--muted); }
 
 .tn-empty { text-align: center; padding: 26px 14px; }
 .tn-empty strong { display: block; font-size: 17px; margin-bottom: 6px; }
