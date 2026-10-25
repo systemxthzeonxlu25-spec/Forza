@@ -407,6 +407,7 @@
     chooseDefaults();
     renderTable();
     syncUrl();
+    renderProgress();
     loadSectors(!!opts.sectors);
     runCompare();
   }
@@ -1255,6 +1256,81 @@
       renderMap();
     }, 80);
   }).observe($("#cmp-body"));
+
+  // ------------------------------------------------------------------ 进步曲线
+  // 这条赛道 + 这台车的完整圈按天分组（不看调校筛选：要看的就是长期进步）。
+  // 每天：最快圈、中位数（不算起步圈，起步圈天生慢）、圈数；历史 PB = 到那天为止的最快圈。
+  let progChart = null;
+  function progressDays() {
+    const days = new Map();
+    for (const l of lapsOfTrackCar()) {
+      if (!l.is_complete || !(l.lap_time > 0) || !l.created_at) continue;
+      const day = String(l.created_at).slice(0, 10);
+      if (!days.has(day)) days.set(day, []);
+      days.get(day).push(l);
+    }
+    let pb = Infinity;
+    return [...days.keys()].sort().map((day) => {
+      const ls = days.get(day);
+      const best = Math.min(...ls.map((l) => l.lap_time));
+      const flying = ls.filter((l) => !(l.flags || []).includes("first_lap")).map((l) => l.lap_time).sort((a, b) => a - b);
+      const mid = flying.length ? (flying.length % 2 ? flying[(flying.length - 1) / 2]
+        : (flying[flying.length / 2 - 1] + flying[flying.length / 2]) / 2) : null;
+      pb = Math.min(pb, best);
+      return { day, n: ls.length, best, median: mid, pb };
+    });
+  }
+  function renderProgress() {
+    const card = $("#progress-card"), body = $("#prog-body");
+    if (progChart) { progChart.destroy(); progChart = null; }
+    const days = progressDays();
+    card.hidden = !days.length;
+    if (!days.length) return;
+    const laps = days.reduce((a, d) => a + d.n, 0);
+    const first = days[0], last = days[days.length - 1];
+    $("#prog-sub").textContent = `练了 ${days.length} 天、${laps} 个完整圈`;
+    if (days.length < 2) {
+      body.innerHTML = `<p class="muted small">目前只有 ${esc(first.day)} 一天的数据（最快 ${esc(F.fmtLap(first.best))}）。换一天再来跑，这里就会画出每天的进步。</p>`;
+      return;
+    }
+    const gain = first.best - last.pb;
+    const lastGain = days.length >= 2 ? days[days.length - 2].pb - last.pb : 0;
+    const head = gain > 0.0005
+      ? `PB 从第一天的 ${F.fmtLap(first.best)} 提到 ${F.fmtLap(last.pb)}，快了 ${gain.toFixed(3)} s`
+      : `PB 还是第一天的 ${F.fmtLap(last.pb)}`;
+    const tail = lastGain > 0.0005 ? `；最近一天又刷新了 ${lastGain.toFixed(3)} s` : "";
+    body.innerHTML = `<p class="small">${esc(head + tail)}。中位数代表平时的稳定水平，比单圈最快更能看出是不是真练出来了。</p><div class="prog-chart"></div>`;
+    if (typeof uPlot === "undefined") return;
+    const host = body.querySelector(".prog-chart");
+    const x = days.map((_, i) => i);
+    const font = `12px system-ui, sans-serif`;
+    const label = (i) => (days[i] ? days[i].day.slice(5).replace("-", "/") : "");
+    const pts = (c) => ({ stroke: c, width: 2, points: { show: true, size: 6, fill: c } });
+    const opts = {
+      width: Math.max(260, host.clientWidth), height: 200,
+      legend: { show: true, live: false },
+      cursor: { y: false, drag: { x: false, y: false } },
+      scales: { x: { time: false, range: (u, mn, mx) => [mn - 0.3, mx + 0.3] } },
+      axes: [
+        { stroke: COL.muted, font, grid: { show: false }, ticks: { show: false }, size: 28,
+          splits: () => x, values: (u, vals) => vals.map((v) => (Number.isInteger(v) ? label(v) : "")) },
+        { stroke: COL.muted, font, size: 64, grid: { stroke: GRID, width: 1 }, ticks: { show: false },
+          values: (u, vals) => vals.map((v) => F.fmtLap(v)) },
+      ],
+      series: [
+        { label: "日期", value: (u, v) => label(v) },
+        { label: "当天最快", ...pts(COL.b), value: (u, v) => F.fmtLap(v) },
+        { label: "当天中位数", stroke: COL.muted, width: 1.5, dash: [5, 4], points: { show: true, size: 4 }, value: (u, v) => (v == null ? "--" : F.fmtLap(v)) },
+        { label: "历史 PB", stroke: COL.a, width: 2, paths: uPlot.paths.stepped({ align: 1 }), points: { show: false }, value: (u, v) => F.fmtLap(v) },
+      ],
+    };
+    progChart = new uPlot(opts, [x, days.map((d) => d.best), days.map((d) => d.median), days.map((d) => d.pb)], host);
+  }
+  new ResizeObserver(() => {
+    if (!progChart) return;
+    const w = Math.max(260, $("#prog-body").clientWidth);
+    if (progChart.width !== w) progChart.setSize({ width: w, height: 200 });
+  }).observe($("#progress-card"));
 
   // ------------------------------------------------------------------ 赛道图（canvas）
   const MAP = { canvas: $("#map"), base: document.createElement("canvas"), pts: null, proj: null, scaleMax: 1 };
