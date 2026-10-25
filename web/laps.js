@@ -105,8 +105,10 @@
     loadSetupNames();
   }
 
+  let progChart = null;            // 进步曲线的 uPlot 实例（见下面“进步曲线”一节）
   function showPageState(kind, msg) {
-    for (const id of ["#filters", "#laps-card", "#compare"]) $(id).hidden = true;
+    for (const id of ["#filters", "#laps-card", "#progress-card", "#sectors-card", "#compare"]) $(id).hidden = true;
+    if (progChart) { progChart.destroy(); progChart = null; }
     const el = $("#page-state");
     el.hidden = false;
     el.classList.toggle("error", kind === "error");
@@ -1260,7 +1262,6 @@
   // ------------------------------------------------------------------ 进步曲线
   // 这条赛道 + 这台车的完整圈按天分组（不看调校筛选：要看的就是长期进步）。
   // 每天：最快圈、中位数（不算起步圈，起步圈天生慢）、圈数；历史 PB = 到那天为止的最快圈。
-  let progChart = null;
   function progressDays() {
     const days = new Map();
     for (const l of lapsOfTrackCar()) {

@@ -1160,7 +1160,8 @@
   const hasSpeech = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
   function sayTime(sec) {
     if (!num(sec) || sec <= 0) return "";
-    const m = Math.floor(sec / 60), r = sec - m * 60;
+    const tenths = Math.round(sec * 10);            // 先整体四舍五入到 0.1 s，59.96 才会念成 1分0秒 而不是 60秒
+    const m = Math.floor(tenths / 600), r = (tenths - m * 600) / 10;
     const rs = r.toFixed(1).replace(/\.0$/, "");
     return m > 0 ? `${m}分${rs}秒` : `${rs}秒`;
   }

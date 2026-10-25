@@ -441,10 +441,10 @@
 
     card.appendChild(el("h4", "", "可以试试（常见调整方向）"));
     const ol = el("ol", "fd-tips");
-    const lap = res.lap && res.lap.id ? lapById(res.lap.id) : null;
+    const lap = res.lap || null;                   // 诊断结果自带圈的 game / car_ordinal（不依赖页面上拉到的圈列表）
     for (const s of f.suggestions || []) {
       const li = el("li", "", s);
-      if (canRecord(lap) && !/^先排除驾驶/.test(s)) li.appendChild(tryButton(s, f, lap));
+      if (canRecord(lap) && isSetupChange(s)) li.appendChild(tryButton(s, f, lap));
       ol.appendChild(li);
     }
     card.appendChild(ol);
@@ -454,6 +454,12 @@
 
   // “照这条改了”：在游戏里按某条建议改完调校后，一键记成新的调校版本（名字预填成这条建议）。
   // 之后存的圈归到新版本；车辆调校页的版本对比会告诉你圈速变没变、这项问题是不是少了。
+  // 只有真的是“改调校”的建议才给按钮：驾驶建议（先排除驾驶、换走线、先把刹车做稳…）和提示性的话
+  // 点了会凭空记一个新版本、把之后的圈错归过去，所以按调校项关键词白名单判断
+  const SETUP_WORDS = /防倾杆|弹簧|阻尼|下压力|空力|齿比|终传|差速|锁止|刹车平衡|刹车压力|胎压|外倾|前束|后倾|车身高度|离地间隙/;
+  function isSetupChange(s) {
+    return SETUP_WORDS.test(s) && !/^(先|如果)/.test(s);
+  }
   function canRecord(lap) {
     return !!(lap && lap.game && lap.car_ordinal !== null && lap.car_ordinal !== undefined);
   }
@@ -468,7 +474,7 @@
       try {
         await F.api("/api/setups", { method: "POST", body: {
           game: lap.game, car_ordinal: lap.car_ordinal, name: name.trim().slice(0, 60),
-          note: `针对诊断：${f.title}`.slice(0, 300) } });
+          note: `针对诊断：${f.title} #${f.id}`.slice(0, 300) } });
         b.replaceWith(el("span", "fd-try-ok", "已记成新版本。跑 5 圈以上，再到“车辆调校”页和改之前的版本对比"));
       } catch (e) {
         b.disabled = false;

@@ -358,11 +358,12 @@
     const cell = (x, n) => `${x.laps_with}/${n}`;
     const tot = (x) => (num(x.total_s) ? `${x.total_s.toFixed(2)} s` : "");
     const chg = { fewer: `<span class="chg-fewer">B 少了</span>`, more: `<span class="chg-more">B 多了</span>`, same: `<span class="muted">一样</span>` };
-    // 调车诊断页“照这条改了”记的版本，说明是“针对诊断：<标题>”：把这一行标出来，一眼看它少没少
-    const PFX = "针对诊断：";
-    const target = (c.b.note || "").startsWith(PFX) ? c.b.note.slice(PFX.length) : null;
-    const rows = c.findings_by_id.map((f) => `<tr${f.title === target ? ` class="target"` : ""}>
-      <td class="wrap">${esc(f.title)} <span class="muted">${esc(f.category_label || "")}</span>${f.title === target ? ` <span class="badge-target">这次针对的</span>` : ""}</td>
+    // 调车诊断页“照这条改了”记的版本，说明是“针对诊断：<标题> #<诊断项 id>”：按 id 把这一行标出来
+    // （标题里带弯道编号，每圈可能不一样；id 是固定的），一眼看它少没少
+    const m = /^针对诊断：.*#([\w.:-]+)\s*$/.exec(c.b.note || "");
+    const target = m ? m[1] : null;
+    const rows = c.findings_by_id.map((f) => `<tr${f.id === target ? ` class="target"` : ""}>
+      <td class="wrap">${esc(f.title)} <span class="muted">${esc(f.category_label || "")}</span>${f.id === target ? ` <span class="badge-target">这次针对的</span>` : ""}</td>
       <td class="num">${cell(f.a, na)}</td><td class="num">${tot(f.a)}</td>
       <td class="num">${cell(f.b, nb)}</td><td class="num">${tot(f.b)}</td>
       <td>${chg[f.change] || ""}</td></tr>`).join("");
