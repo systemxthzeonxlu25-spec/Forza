@@ -2,7 +2,8 @@ name: tests
 
 on:
   push:
-    branches: [ccr-f2c33173-3rzksa]
+    # 现在的默认分支名是自动生成的，以后改名成 main 也照样触发
+    branches: [ccr-f2c33173-3rzksa, main]
   pull_request:
 
 jobs:
