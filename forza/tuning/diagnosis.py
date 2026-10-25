@@ -8,6 +8,7 @@ import math
 import numpy as np
 
 from ..lapdata import LapData
+from ..util import jsonable
 from .rules import DEFAULT_RULES, _merge, rules_info
 from .common import (
     AXLE_CN,
@@ -19,7 +20,6 @@ from .common import (
     _Ctx,
     _corner_key,
     _corner_label,
-    _json_safe,
     _lap_info,
     _lap_label,
     _lower,
@@ -34,6 +34,7 @@ from .check_brakes import _check_brake_balance, _check_brakes
 from .check_brake_pressure import _check_brake_pressure
 from .check_differential import _check_differential
 from .check_gearing import _check_gearing
+from .check_downshift import _check_downshift
 from .blocks import _balance_block, _body_block, _body_samples, _brake_block
 
 # ================================================================ 交叉印证
@@ -83,7 +84,7 @@ def _rules_info(rules: dict | None) -> dict:
 
 
 CHECKS = (_check_balance, _check_suspension, _check_tires, _check_traction, _check_brakes, _check_brake_balance,
-          _check_brake_pressure, _check_differential, _check_gearing)
+          _check_brake_pressure, _check_differential, _check_gearing, _check_downshift)
 
 
 def _run(lap: LapData, info: dict, corners: list[dict] | None, abs_on: bool | None, aero: bool | None) -> tuple[dict, _Ctx]:
@@ -132,7 +133,7 @@ def _run(lap: LapData, info: dict, corners: list[dict] | None, abs_on: bool | No
         "not_available": copy.deepcopy(NOT_AVAILABLE), "data_quality": ctx.quality,
         "rules": {"source": info["source"], "error": info["error"]}, **blocks,
     }
-    return _json_safe(res), ctx
+    return jsonable(res), ctx
 
 
 def _corners_out(corners: list[dict]) -> list[dict]:
@@ -296,7 +297,7 @@ def diagnose_many(laps: list[LapData], rules: dict | None = None, corners: list 
     summary["laps_total"] = n_all
     summary["reference_lap"] = first["lap_label"] if first else None
     summary["assists"] = {"abs_on": abs_on, "aero": aero}
-    return _json_safe({
+    return jsonable({
         "mode": "multi", "usable": n > 0, "lap": first["lap"] if first else {}, "lap_label": f"{n_all} 圈合并",
         "laps": lap_rows, "summary": summary, "corners": first["corners"] if first else [],
         "findings": findings, "checks": checks, "not_available": copy.deepcopy(NOT_AVAILABLE),
@@ -312,4 +313,4 @@ def track_outline(lap: LapData, max_points: int = 600) -> dict:
         return {"pos_x": [], "pos_z": [], "dist": []}
     step = max(1, math.ceil(n / max_points))
     idx = np.unique(np.concatenate([np.arange(0, n, step), [n - 1]]))
-    return _json_safe({k: np.round(np.asarray(lap[k], float)[idx], 2) for k in ("pos_x", "pos_z", "dist")})
+    return jsonable({k: np.round(np.asarray(lap[k], float)[idx], 2) for k in ("pos_x", "pos_z", "dist")})

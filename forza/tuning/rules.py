@@ -46,6 +46,7 @@ DEFAULT_RULES: dict = {
              "max_gap_factor": 3.0, "roll_min_lat_g": 0.50, "steady_max_dg_s": 1.0, "pitch_min_long_g": 0.30,
              "pitch_max_lat_g": 0.20, "cruise_max_long_g": 0.10, "near_bottom": 0.95, "near_top": 0.05,
              "min_samples": 120, "min_fit_s": 1.0, "grade_smooth_m": 10.0},
+    "downshift": {"overrev_frac": 0.98, "window_s": 0.8, "max_drop": 3, "alert_events": 3},
     "confidence": {"high_factor": 4.0, "medium_factor": 1.5, "margin": 0.10},
     "multi": {"sporadic_frac": 0.5},
 }

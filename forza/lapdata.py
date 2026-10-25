@@ -76,6 +76,23 @@ def frame_sample(fr: Frame, t: float, dist: float) -> list[float]:
     ]
 
 
+def increasing_index(dist) -> np.ndarray:
+    """距离通道里能拿来做 np.interp 横轴的采样下标：距离严格递增。
+
+    np.interp 要求横轴递增；圈内距离偶尔会倒退（倒带、DistanceTraveled 抖动）或重复（停住不动），
+    这里去掉非有限值，以及没有超过之前最大距离的点。用法：idx = increasing_index(d); np.interp(x, d[idx], y[idx])。
+    重采样、分段计时、实时差距的参照圈都用这一个，几处的口径一致。
+    """
+    d = np.asarray(dist, dtype=np.float64)
+    finite = np.flatnonzero(np.isfinite(d))
+    if finite.size <= 1:
+        return finite
+    df = d[finite]
+    runmax = np.maximum.accumulate(df)
+    keep = np.concatenate([[True], np.diff(runmax) > 1e-6])
+    return finite[keep]
+
+
 @dataclass
 class LapData:
     """一圈（或一次冲刺赛）的完整数据。

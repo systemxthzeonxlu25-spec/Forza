@@ -1,3 +1,4 @@
 fastapi>=0.110
+pydantic>=2          # 配置校验用到 pydantic 2 的 TypeAdapter（老版本 FastAPI 可能装的是 pydantic 1）
 uvicorn[standard]>=0.29
 numpy>=1.26

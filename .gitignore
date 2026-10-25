@@ -2,8 +2,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-data/
-recordings/
+/data/
+/recordings/
 samples/*.frec
 samples/*.frec.gz
 samples/*.truth.json

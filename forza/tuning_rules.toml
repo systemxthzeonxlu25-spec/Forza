@@ -159,6 +159,13 @@ alert_total_s = 3.0        # 累计超过这么久（秒）→ 严重
 min_gear_time_s = 1.0      # 某个挡位累计用了这么久（秒）才算“用到过”（过滤换挡瞬间的跳变）
 headroom_frac = 0.85       # 最高挡最高转速还不到最高转速的这个比例 → 提示齿比可能偏长（仅提示）
 
+[downshift]
+# 降挡超转：降挡后转速一下冲到断油附近 = 车速还太快就降了挡（思路参考 Pacefinder 的 bad_shift 检测）
+overrev_frac = 0.98        # 降挡后转速 ≥ 最高转速（engine_max_rpm）× 这个 = 超转
+window_s = 0.8             # 降挡后这么久（秒）里看最高转速
+max_drop = 3               # 一次最多降这么多挡才算正常降挡（再多多半是数据跳变）
+alert_events = 3           # 一圈里超过这么多次 → 严重
+
 [confidence]
 high_factor = 4.0          # 累计时长 ≥ 最短时长 × 这个，且超出阈值的幅度 ≥ margin → 高
 medium_factor = 1.5        # 累计时长 ≥ 最短时长 × 这个，或超出幅度 ≥ margin → 中；否则低

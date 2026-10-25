@@ -2,6 +2,7 @@
 
     GET    /api/laps?track_id=&car_ordinal=&game=&complete_only=&limit=   圈列表（带“与最佳圈差”和 is_best）
     GET    /api/laps/{id}?step=&channels=a,b                              一圈的原始通道数据
+    GET    /api/laps/{id}/csv                                             一圈的全部通道导出成 CSV（Excel / 其他分析工具打开）
     PATCH  /api/laps/{id}            {"note": "...", "is_complete": true}  改备注 / 标记完整
     DELETE /api/laps/{id}
     GET    /api/tracks               PATCH /api/tracks/{id}            {"name": "..."}
@@ -18,13 +19,16 @@
 """
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import math
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from ..analysis import EXTRA_CHANNELS, jsonable
+from ..analysis import EXTRA_CHANNELS
+from ..util import jsonable
 from ..analysis import compare as compare_laps
 
 log = logging.getLogger(__name__)
@@ -122,6 +126,25 @@ def get_lap(request: Request, lap_id: int, step: int = 1, channels: str | None =
     out["meta"] = jsonable(out["meta"])
     out["available_channels"] = list(lap.ch.keys())
     return out
+
+
+@router.get("/laps/{lap_id}/csv")
+def export_lap_csv(request: Request, lap_id: int):
+    """一圈的全部采样导出成 CSV：第一行是通道名（含义见 forza/lapdata.py 的 CHANNELS），之后每行一个采样点。
+    缺数据（NaN）的格子留空。用标准库 csv 写，Excel、MoTeC 之外的各种分析工具都能直接打开。"""
+    lap = _store(request).get_lap(lap_id)
+    if lap is None:
+        raise HTTPException(404, f"圈 #{lap_id} 不存在（可能已经删掉了）")
+    names = list(lap.ch.keys())
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(names)
+    cols = [lap.ch[n].tolist() for n in names]
+    for row in zip(*cols):
+        w.writerow(["" if not math.isfinite(v) else f"{v:.6g}" for v in row])
+    fname = f"lap_{lap_id}.csv"
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @router.get("/laps/{lap_id}/reference")

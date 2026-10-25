@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 
 import numpy as np
 
@@ -15,7 +14,7 @@ AXLE_WHEELS = {"front": ("fl", "fr"), "rear": ("rl", "rr")}
 PHASE_CN = {"entry": "入弯", "mid": "弯中", "exit": "出弯", "straight": "直道"}
 PHASES = ("entry", "mid", "exit")
 CATEGORY_CN = {"balance": "转向平衡", "suspension": "悬挂", "tires": "轮胎", "traction": "牵引",
-               "brakes": "刹车", "differential": "差速器", "gearing": "齿比"}
+               "brakes": "刹车", "differential": "差速器", "gearing": "齿比", "shifting": "换挡"}
 SEVERITY_RANK = {"info": 0, "warn": 1, "alert": 2}
 CONF_LEVELS = ("low", "medium", "high")
 DRIVETRAIN_CN = {0: "前驱 FWD", 1: "后驱 RWD", 2: "四驱 AWD"}
@@ -28,7 +27,7 @@ CHECK_LIST = (
     ("balance", "转向平衡（转向不足 / 转向过度）"), ("suspension", "悬挂触底 / 伸到底"), ("tires", "胎温平衡"),
     ("traction", "驱动轮空转"), ("brakes", "刹车抱死"), ("brake_balance", "刹车平衡（直线重刹时前后轴滑移）"),
     ("brake_pressure", "刹车压力（踏板-减速度饱和）"), ("differential", "差速器（入弯松刹内侧轮 / 四驱前后分配）"),
-    ("gearing", "齿比（最高挡撞断油 / 转速余量）"),
+    ("gearing", "齿比（最高挡撞断油 / 转速余量）"), ("downshift", "降挡超转（降挡太早）"),
 )
 CHECK_NAME = dict(CHECK_LIST)
 
@@ -134,24 +133,6 @@ def _confidence(rules: dict, total_s: float, min_s: float, margin: float) -> str
     if total_s >= min_s * c["medium_factor"] or margin >= c["margin"]:
         return "medium"
     return "low"
-
-
-def _json_safe(x):
-    """递归转成普通 Python 类型；NaN / inf → None。"""
-    if isinstance(x, dict):
-        return {str(k): _json_safe(v) for k, v in x.items()}
-    if isinstance(x, (list, tuple)):
-        return [_json_safe(v) for v in x]
-    if isinstance(x, (np.bool_, bool)):
-        return bool(x)
-    if isinstance(x, (np.integer, int)):
-        return int(x)
-    if isinstance(x, (np.floating, float)):
-        f = float(x)
-        return f if math.isfinite(f) else None
-    if isinstance(x, np.ndarray):
-        return _json_safe(x.tolist())
-    return x
 
 
 def _finding(fid: str, category: str, severity: str, title: str, summary: str, evidence: list[str],

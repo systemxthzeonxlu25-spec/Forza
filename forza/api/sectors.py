@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import sectors
-from ..analysis import jsonable
+from ..util import jsonable
 
 router = APIRouter(prefix="/api")
 

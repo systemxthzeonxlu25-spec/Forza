@@ -33,7 +33,7 @@ from .corners import (
     detect_corners,
     resample_by_distance,
 )
-from .lapdata import LapData
+from .lapdata import LapData, increasing_index
 from .util import is_standing_first_lap, now_iso
 
 OUTLIER_RATIO = 0.20          # 某段用时偏离这段中位数超过 20% 就不计入（理论最佳 / 标准差都不用它）
@@ -97,13 +97,9 @@ def _lap_length(lap: LapData) -> float:
 
 def _dist_time(lap: LapData) -> tuple[np.ndarray, np.ndarray]:
     """单调递增的 (距离, 时间)，用来在任意距离上插值时间（倒退 / 重复的点去掉）。"""
-    d, t = lap["dist"], lap["t"]
-    ok = np.isfinite(d) & np.isfinite(t)
-    d, t = d[ok], t[ok]
-    if len(d) > 1:
-        keep = np.concatenate([[True], np.diff(np.maximum.accumulate(d)) > 1e-6])
-        d, t = np.maximum.accumulate(d)[keep], t[keep]
-    return d, t
+    idx = increasing_index(lap["dist"])
+    idx = idx[np.isfinite(lap["t"][idx])]
+    return lap["dist"][idx], lap["t"][idx]
 
 
 # ================================================================ 生成 / 读写弯道表
@@ -116,8 +112,8 @@ def build_layout(lap: LapData) -> dict:
     corners = detect_corners(lap)
     if not corners:
         raise ValueError("这圈没识别出弯道（可能没有坐标数据）")
-    keep = np.concatenate([[True], np.diff(lap["dist"]) > 1e-6]) if len(lap) > 1 else np.ones(len(lap), bool)
-    dd = np.maximum.accumulate(lap["dist"][keep])
+    keep = increasing_index(lap["dist"])       # 插值横轴：距离严格递增的采样
+    dd = lap["dist"][keep]
 
     def pos_at(m: float) -> tuple[float | None, float | None]:
         if not (lap.has("pos_x") and lap.has("pos_z")):

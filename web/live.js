@@ -11,7 +11,11 @@
   const TIRE_HOT_C = 115;       // 过热：红
   const SHIFT_WARN = 0.92;      // 没有实测换挡点时：转速 ≥ 最高转速 × 92% 转速条变黄
   const SHIFT_NOW = 0.97;       // ≥ 97%：红色闪烁，该换挡了
-  const SHIFT_EARLY_RPM = 300;  // 有实测换挡点（/api/powertrain）时：提前这么多转变黄，到点闪红
+  const SHIFT_EARLY_RPM = 300;  // 有实测换挡点、但还估不出转速上升速度时：提前这么多转变黄，到点闪红
+  // 预测式换挡提示（思路参考 ForzaShiftTone）：按最近的转速上升速度，预计 SHIFT_LEAD_S 秒后到换挡点就变黄。
+  // 固定提前 N 转在低挡（转速涨得快）会太晚、高挡（涨得慢）会太早；按时间提前，每个挡位的提前量都合适。
+  const SHIFT_LEAD_S = 0.28;    // 提前多少秒提示：大致是看到灯 → 手上换挡的反应时间
+  const RPM_RATE_WINDOW_S = 0.3;   // 用最近这么久（同一挡位）的转速估上升速度
   const CAR_INFO_REFRESH_MS = 60000;   // 换挡点 / 当前调校版本多久重新拉一次（换车时立刻拉）
   const SUMMARY_SHOW_MS = 10000;       // 本圈小结卡片显示多久
   const SUMMARY_MAX_AGE_S = 120;       // 刚打开页面时，比这更早的小结只放进菜单、不弹卡片
@@ -126,6 +130,7 @@
   const num = (x) => typeof x === "number" && isFinite(x);
   const signed = (x, d = 2) => (num(x) ? (x < 0 ? "−" : "") + Math.abs(x).toFixed(d) : "--");
   const esc = Forza.esc;      // 公用的 HTML 转义（见 common.js）
+  const getJSON = Forza.getJSON;  // 不抛异常的请求（见 common.js）
 
   // ======================= 颜色 =======================
   // 胎温 → 颜色：冷蓝 → 理想绿 → 偏热黄 → 过热红。
@@ -212,6 +217,7 @@
       latest = msg;
       const f = msg.frame;
       if (num(f.g_lat) && num(f.g_long)) gTrail.push([lastMsgAt, f.g_lat, f.g_long]);
+      if (num(msg.t) && num(f.rpm)) pushRpm(msg.t, f.rpm, f.gear);
     }
     dirty = true;
   }
@@ -249,8 +255,9 @@
     }
     const sh = shiftThresholds(f, maxr);
     const rpm = num(f.rpm) ? f.rpm : 0;
-    setCls(body, "rpm-warn", sh !== null && rpm >= sh.warn && rpm < sh.now);
-    setCls(body, "rpm-shift", sh !== null && rpm >= sh.now);
+    const shState = shiftState(f, sh, rpm);
+    setCls(body, "rpm-warn", shState === "warn");
+    setCls(body, "rpm-shift", shState === "shift");
     if (sh && E.rpmTicks._shift !== sh.now) {          // 转速条上标出这一挡的换挡点
       E.rpmTicks._shift = sh.now;
       E.rpmRow.style.setProperty("--shift-at", maxr > 0 ? `${clamp(sh.now / maxr, 0, 1) * 100}%` : "200%");
@@ -303,12 +310,42 @@
     renderLap(f, lap);
 
     // 其它
-    setText(E.fuel, num(f.fuel) ? `${Math.round(f.fuel * 100)}%` : "--");
+    const fuelLaps = fuelLapsLeft(f, lap);
+    // 手机竖屏这一格很窄：10 圈以上只显示整数（向下取整，宁可少说）
+    const lapsTxt = fuelLaps === null ? "" : ` · 够${fuelLaps >= 10 ? Math.floor(fuelLaps) : fuelLaps.toFixed(1)}圈`;
+    setText(E.fuel, num(f.fuel) ? `${Math.round(f.fuel * 100)}%${lapsTxt}` : "--");
     setText(E.power, num(f.power_kw) ? `${Math.round(f.power_kw)} kW` : "--");
     setText(E.torque, num(f.torque) ? `${Math.round(f.torque)} N·m` : "--");
     setText(E.boost, num(f.boost) ? f.boost.toFixed(1) : "--");
 
     drawGBall(f, now);
+  }
+
+  // ---------- 油耗推算（思路参考 gt7dashboard 的 fuel map）：每圈用掉多少油 → 剩下的够跑几圈 ----------
+  // 只在油量确实在减少时显示（FH 和关了油耗模拟的比赛油量不变）。加油（油量变多）、倒带 / 重开（圈数变小）时重新算。
+  const FUEL_KEEP_LAPS = 3;        // 用最近几圈的油耗中位数
+  // whole = 这一圈是从过线那一刻开始看的（页面在圈中途打开时，第一圈只看到半圈，不能算一整圈的油耗）
+  // prev = 上一帧的油量：加油要和上一帧比（圈中途加油时，油量可能仍低于这圈开始时，和圈初比就发现不了）
+  const fuel = { lap: null, start: null, prev: null, whole: false, used: [] };
+  function fuelLapsLeft(f, lap) {
+    if (!lap || !num(lap.number) || !num(f.fuel)) return null;
+    const refueled = fuel.prev !== null && f.fuel > fuel.prev + 0.005;
+    fuel.prev = f.fuel;
+    if (fuel.lap === null || lap.number < fuel.lap || refueled) {
+      fuel.lap = lap.number; fuel.start = f.fuel; fuel.whole = false;   // 刚打开 / 倒带重开 / 加过油：这圈不算
+      if (lap.number === 0) fuel.used.length = 0;
+    } else if (lap.number > fuel.lap) {                        // 过线：记下刚跑完那一圈用了多少
+      const used = fuel.start - f.fuel;
+      if (fuel.whole && lap.number === fuel.lap + 1 && used > 0.002) {
+        fuel.used.push(used);
+        if (fuel.used.length > FUEL_KEEP_LAPS) fuel.used.shift();
+      }
+      fuel.lap = lap.number; fuel.start = f.fuel; fuel.whole = true;
+    }
+    if (!fuel.used.length) return null;
+    const sorted = [...fuel.used].sort((a, b) => a - b);
+    const per = sorted[Math.floor(sorted.length / 2)];
+    return per > 0 ? f.fuel / per : null;
   }
 
   function renderLap(f, lap) {
@@ -712,8 +749,34 @@
     return { delta: r ? r.delta : null, predicted: r ? r.predicted : null, label, note, tentative };
   }
 
-  // ======================= 换挡灯：实测换挡点（/api/powertrain）=======================
+  // ======================= 换挡灯：实测换挡点（/api/powertrain）+ 转速上升速度 =======================
   let power = null;                // 最近一次 /api/powertrain 的结果（null = 没有，用默认 92% / 97%）
+  const rpmHist = [];              // 最近 1 秒的 [服务端时间 s, 转速, 挡位]
+  function pushRpm(t, rpm, gear) {
+    if (rpmHist.length && t <= rpmHist[rpmHist.length - 1][0]) return;   // 同一帧重复发送 / 时间倒退
+    rpmHist.push([t, rpm, gear]);
+    while (rpmHist.length && t - rpmHist[0][0] > 1.0) rpmHist.shift();
+  }
+  // 当前挡位最近 RPM_RATE_WINDOW_S 秒的转速上升速度（转/秒，最小二乘斜率）；样本不够或换了挡返回 null
+  function rpmRate(gear) {
+    if (!rpmHist.length) return null;
+    const tEnd = rpmHist[rpmHist.length - 1][0];
+    const pts = rpmHist.filter((p) => p[2] === gear && tEnd - p[0] <= RPM_RATE_WINDOW_S);
+    if (pts.length < 3) return null;
+    const n = pts.length;
+    const mt = pts.reduce((a, p) => a + p[0], 0) / n, mr = pts.reduce((a, p) => a + p[1], 0) / n;
+    let sxy = 0, sxx = 0;
+    for (const p of pts) { sxy += (p[0] - mt) * (p[1] - mr); sxx += (p[0] - mt) ** 2; }
+    return sxx > 0 ? sxy / sxx : null;
+  }
+  // 换挡灯状态："shift" = 到点了（闪红），"warn" = 快到了（变黄），null = 还早
+  function shiftState(f, sh, rpm) {
+    if (!sh) return null;
+    if (rpm >= sh.now) return "shift";
+    const rate = rpmRate(f.gear);
+    if (rate !== null) return rate > 0 && rpm + rate * SHIFT_LEAD_S >= sh.now ? "warn" : null;
+    return rpm >= sh.warn ? "warn" : null;           // 估不出速度（刚换挡、数据太少）：退回固定阈值
+  }
   function shiftThresholds(f, maxr) {
     const sp = power && power.shift_rpm ? power.shift_rpm[f.gear] : null;
     if (num(sp) && sp > 0) return { warn: sp - SHIFT_EARLY_RPM, now: sp, src: "measured" };
@@ -725,7 +788,7 @@
       const gears = Object.keys(power.shift_rpm).sort((a, b) => Number(a) - Number(b));
       const list = gears.map((g) => `${g}→${Number(g) + 1} ${Math.round(power.shift_rpm[g])}`).join(" · ");
       const n = num(power.source_laps) ? `，${power.source_laps} 圈数据` : "";
-      setHTML(E.setShift, `<b>实测</b>${esc(n)}<br><span class="muted mono">${esc(list)}</span>`);
+      setHTML(E.setShift, `<b>实测</b>${esc(n)}，预计 ${SHIFT_LEAD_S} 秒内到换挡点就变黄<br><span class="muted mono">${esc(list)}</span>`);
     } else {
       setHTML(E.setShift, `<b>默认</b> <span class="muted">（最高转速 ${Math.round(SHIFT_WARN * 100)}% 变黄 / ${Math.round(SHIFT_NOW * 100)}% 闪红）</span>`);
     }
@@ -735,16 +798,6 @@
   // 车（游戏 / ordinal / PI）变了立刻拉一次，之后每 60 秒拉一次。接口不存在或出错时退回默认、隐藏相关界面。
   let carKey = "", carInfoTimer = null;
   const setupInfo = { available: false, setup: null };
-  async function getJSON(path, opts) {
-    try {
-      const r = await fetch(path, opts);
-      let data = null;
-      try { data = await r.json(); } catch (_) { /* 不是 JSON */ }
-      return { ok: r.ok, status: r.status, data };
-    } catch (_) {
-      return { ok: false, status: 0, data: null };
-    }
-  }
   function watchCar(f) {
     const c = f.car || {};
     if (!c.ordinal) return;

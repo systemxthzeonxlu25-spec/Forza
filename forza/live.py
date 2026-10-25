@@ -129,7 +129,7 @@ import numpy as np
 from fastapi import WebSocket
 
 from .frame import Frame
-from .lapdata import LapData
+from .lapdata import LapData, increasing_index
 from .laps import should_use_integrated_distance
 from .netinfo import lan_ips
 from .packet import FORMATS
@@ -185,7 +185,7 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
                     guess=False 返回 None（中途接入、还没跑完一圈飞驰圈时用：宁可先不显示 PB，也不拿错的布局比）
       冲刺赛只看起点，多个候选取最近的。
     """
-    if track_ordinal:
+    if track_ordinal is not None:        # 0 也是有效的赛道 ID（见 storage.find_track）
         rows = store.query("SELECT id FROM tracks WHERE family=? AND track_ordinal=? AND kind=? ORDER BY id",
                            (family, track_ordinal, kind))
         return rows[0]["id"] if rows else None
@@ -240,9 +240,9 @@ def match_track(store, *, family: str, kind: str, track_ordinal: int | None, x: 
 def _ref_arrays(lap: LapData) -> tuple[np.ndarray, np.ndarray, bool]:
     """存档圈的 (距离, 时间, 是否速度积分距离)，距离做成单调的（np.interp 要求）。"""
     integrated = lap_has_flag(lap.meta, "dist_integrated")
-    rd = np.maximum.accumulate(np.asarray(lap.ch["dist"], dtype=np.float64))
-    rt_ = np.asarray(lap.ch["t"], dtype=np.float64)
-    return rd, rt_, integrated
+    idx = increasing_index(lap.ch["dist"])
+    return (np.asarray(lap.ch["dist"], dtype=np.float64)[idx], np.asarray(lap.ch["t"], dtype=np.float64)[idx],
+            integrated)
 
 
 # ====================================================================== 本圈小结
@@ -633,9 +633,7 @@ class LiveBroadcaster:
         c = self._ref_cache
         if c is None or c[0] != key:
             if kind == "best":
-                integrated = lap_has_flag(obj.meta, "dist_integrated")
-                rd = np.asarray(obj.ch["dist"], dtype=np.float64)
-                rt_ = np.asarray(obj.ch["t"], dtype=np.float64)
+                rd, rt_, integrated = _ref_arrays(obj)
             else:
                 rt_ = np.asarray([r[0] for r in obj.rows], dtype=np.float64)
                 d_field = np.asarray([r[1] for r in obj.rows], dtype=np.float64)
@@ -643,7 +641,8 @@ class LiveBroadcaster:
                 # 和切圈器存圈时用同一个判断，保证挂起圈落盘前后距离口径不变
                 integrated = should_use_integrated_distance(d_field, d_int)
                 rd = d_int if integrated else d_field
-            rd = np.maximum.accumulate(rd)   # np.interp 要求 x 单调
+                idx = increasing_index(rd)       # np.interp 要求横轴严格递增
+                rd, rt_ = rd[idx], rt_[idx]
             c = self._ref_cache = (key, rd, rt_, integrated)
         return lap_time, c[1], c[2], c[3]
 
@@ -656,7 +655,7 @@ class LiveBroadcaster:
         q = {"family": ev.family, "game": ev.game, "car_ordinal": ev.car_ordinal,
              "car_pi": int(fr.car_pi or 0), "track_ordinal": None, "x": None, "z": None,
              "length_m": None, "length_tol": None, "guess": True}
-        if fr.track_ordinal:                      # FM2023：一开始就知道是哪条赛道
+        if fr.track_ordinal is not None:          # FM2023：一开始就知道是哪条赛道（ID 0 也有效）
             q.update(kind="circuit", track_ordinal=int(fr.track_ordinal))
             tkey = ("ord", int(fr.track_ordinal))
         elif st_kind == "sprint?":                # 冲刺赛：按起点
@@ -690,7 +689,7 @@ class LiveBroadcaster:
         """历史最快参照的差距。查库在后台线程里做，这里只读缓存（O(1)）。"""
         found = self._pb_query(det, fr, st_kind)
         if found is None:
-            if st_kind == "circuit" or st_kind == "sprint?" or fr.track_ordinal:
+            if st_kind == "circuit" or st_kind == "sprint?" or fr.track_ordinal is not None:
                 return {"state": "none", "reason": "还不知道是哪条赛道"}
             return {"state": "none", "reason": "第一次过线后才知道是哪条赛道"}
         key, q = found

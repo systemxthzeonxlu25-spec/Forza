@@ -5,6 +5,7 @@
     lap_has_flag(m, name)  某一圈（meta / 数据库行）有没有这个标记
     is_standing_first_lap  赛道赛站立起步的第一圈（起点和距离零点都和飞驰圈不一样）
     round_or_none(x, nd)   数值取舍；NaN / inf / 不是数 → None（JSON 里不能出现 NaN）
+    jsonable(x)            递归转成能直接 json.dumps 的普通 Python 类型（numpy → Python，NaN / inf → None）
 
 圈的 flags 都有哪些（谁加的、什么意思）：
     first_lap           本场第一圈（laps.LapDetector）：赛道赛是从发车格站立起步的
@@ -21,6 +22,8 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime
+
+import numpy as np
 
 
 def now_iso() -> str:
@@ -70,3 +73,25 @@ def round_or_none(x, nd: int = 2) -> float | None:
     if not math.isfinite(x):
         return None
     return round(x, nd)
+
+
+def jsonable(x):
+    """递归转成能直接 json.dumps 的普通 Python 类型：numpy 数组 / 标量 → list / int / float / bool，
+    NaN / inf → None，dict 的键转成字符串。
+
+    接口返回、诊断结果、假数据的标准答案都用这一个（以前三个模块各写了一份，处理的类型还不一样）。
+    """
+    if isinstance(x, dict):
+        return {str(k): jsonable(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [jsonable(v) for v in x]
+    if isinstance(x, np.ndarray):
+        return jsonable(x.tolist())
+    if isinstance(x, (bool, np.bool_)):          # bool 要排在 int 前面：bool 是 int 的子类
+        return bool(x)
+    if isinstance(x, (int, np.integer)):
+        return int(x)
+    if isinstance(x, (float, np.floating)):
+        f = float(x)
+        return f if math.isfinite(f) else None
+    return x
