@@ -804,9 +804,10 @@
     if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
     return audioCtx;
   }
+  // 返回是否真的出了声（声音还没被浏览器放行时返回 false）
   function beep() {
     const ctx = audioCtx;
-    if (!ctx || ctx.state !== "running") return;
+    if (!ctx || ctx.state !== "running") return false;
     const t0 = ctx.currentTime, dur = TONE_MS / 1000;
     const osc = ctx.createOscillator(), gain = ctx.createGain();
     osc.type = "square";
@@ -818,6 +819,7 @@
     osc.connect(gain).connect(ctx.destination);
     osc.start(t0);
     osc.stop(t0 + dur + 0.01);
+    return true;
   }
   // 每帧调用：从“还早”进入 warn / shift 时响一次。换了挡、或转速明显回落后才重新上膛
   let toneGear = null;
@@ -825,9 +827,10 @@
     if (!toneArmed && (f.gear !== toneGear || !sh || rpm < sh.now * TONE_REARM)) toneArmed = true;
     if (!state || !toneArmed) return;
     if (!settings.shiftTone || !num(f.throttle) || f.throttle < TONE_MIN_THROTTLE) return;
+    if (!/^[1-9]\d*$/.test(String(f.gear))) return;     // 倒挡 / 空挡没有“升挡”可言
+    if (!beep()) return;                                  // 没响出来（声音还没放行）：保持上膛，点屏幕后还能补上
     toneArmed = false;
     toneGear = f.gear;
-    beep();
   }
   function renderToneInfo() {
     for (const b of document.querySelectorAll("#set-tone button")) b.classList.toggle("on", b.dataset.v === (settings.shiftTone ? "on" : "off"));
