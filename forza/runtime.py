@@ -101,7 +101,8 @@ class Runtime:
                 k += 1
             return path
         p = Path(str(name).strip())
-        if p.is_absolute() or ".." in p.parts or p.drive:
+        # anchor 包含盘符和根：Windows 上 "/tmp/x" 不算绝对路径，但拼到 rec_dir 后会跑到当前盘根目录
+        if p.is_absolute() or p.anchor or ".." in p.parts:
             raise RecordError(f"录像只能存到录像目录（{rec_dir}）里，请只填文件名")
         if not (p.name.endswith(".frec") or p.name.endswith(".frec.gz")):
             p = p.with_name(p.name + ".frec")

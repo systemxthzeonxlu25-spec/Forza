@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    # 现在的默认分支名是自动生成的，以后改名成 main 也照样触发
+    branches: [ccr-f2c33173-3rzksa, main]
+  pull_request:
+
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        # 用户主要在 Windows 上跑，Linux 上再多测一个新版本 Python
+        include:
+          - os: windows-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.11"
+          - os: ubuntu-latest
+            python: "3.13"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
