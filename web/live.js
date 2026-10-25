@@ -16,6 +16,13 @@
   // 固定提前 N 转在低挡（转速涨得快）会太晚、高挡（涨得慢）会太早；按时间提前，每个挡位的提前量都合适。
   const SHIFT_LEAD_S = 0.28;    // 提前多少秒提示：大致是看到灯 → 手上换挡的反应时间
   const RPM_RATE_WINDOW_S = 0.3;   // 用最近这么久（同一挡位）的转速估上升速度
+  // 换挡提示音：转速条变黄（或直接到点）那一刻“哔”一声，眼睛不用离开游戏画面。
+  // 变黄本来就按 SHIFT_LEAD_S 提前，所以听到声音再换挡正好。转速回落到还早（换了挡 / 收油）后才会再响。
+  const TONE_HZ = 1800;         // 音高：够尖，引擎声里听得清
+  const TONE_MS = 90;           // 时长
+  const TONE_VOL = 0.25;        // 音量（0~1）
+  const TONE_MIN_THROTTLE = 0.5;   // 油门低于这个不响（下坡空挡溜、降挡补油时转速也会涨）
+  const TONE_REARM = 0.9;       // 同一挡位里转速要掉到换挡点的 90% 以下才会再响（防止预测抖动连响）
   const CAR_INFO_REFRESH_MS = 60000;   // 换挡点 / 当前调校版本多久重新拉一次（换车时立刻拉）
   const SUMMARY_SHOW_MS = 10000;       // 本圈小结卡片显示多久
   const SUMMARY_MAX_AGE_S = 120;       // 刚打开页面时，比这更早的小结只放进菜单、不弹卡片
@@ -42,7 +49,7 @@
   // ======================= 本机设置 =======================
   // deltaRef：实时差距对比“本场最快”(session) 还是“历史最快 PB”(pb)；seenSummary：最近看过的小结 id（不重复弹）
   const DEFAULTS = { unit: "kmh", hz: 20, awakeHintDone: false, dismissed: {}, deltaRef: "session",
-    seenSummary: null, snapMin: 10 };
+    seenSummary: null, snapMin: 10, shiftTone: false };
   const settings = loadSettings();
 
   function loadSettings() {
@@ -258,6 +265,7 @@
     const shState = shiftState(f, sh, rpm);
     setCls(body, "rpm-warn", shState === "warn");
     setCls(body, "rpm-shift", shState === "shift");
+    shiftToneTick(shState, f, sh, rpm);
     if (sh && E.rpmTicks._shift !== sh.now) {          // 转速条上标出这一挡的换挡点
       E.rpmTicks._shift = sh.now;
       E.rpmRow.style.setProperty("--shift-at", maxr > 0 ? `${clamp(sh.now / maxr, 0, 1) * 100}%` : "200%");
@@ -673,6 +681,7 @@
     for (const b of document.querySelectorAll("#set-ref button")) b.classList.toggle("on", b.dataset.v === settings.deltaRef);
     for (const b of document.querySelectorAll("#set-snap button")) b.classList.toggle("on", Number(b.dataset.v) === Number(settings.snapMin));
     renderShiftInfo();
+    renderToneInfo();
     renderSetupInfo();
   }
   function setUnit(u) {
@@ -783,6 +792,65 @@
     if (maxr > 0) return { warn: maxr * SHIFT_WARN, now: maxr * SHIFT_NOW, src: "default" };
     return null;
   }
+  // ======================= 换挡提示音 =======================
+  // 浏览器要求用户点过页面才能出声：AudioContext 在点击里创建 / 恢复。刷新页面后要先点一下屏幕。
+  let audioCtx = null, toneArmed = true;
+  function ensureAudio() {
+    if (!audioCtx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      try { audioCtx = new AC(); } catch (_) { return null; }
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+    return audioCtx;
+  }
+  function beep() {
+    const ctx = audioCtx;
+    if (!ctx || ctx.state !== "running") return;
+    const t0 = ctx.currentTime, dur = TONE_MS / 1000;
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = "square";
+    osc.frequency.value = TONE_HZ;
+    gain.gain.setValueAtTime(0, t0);                       // 5 ms 淡入淡出，避免爆音
+    gain.gain.linearRampToValueAtTime(TONE_VOL, t0 + 0.005);
+    gain.gain.setValueAtTime(TONE_VOL, t0 + dur - 0.005);
+    gain.gain.linearRampToValueAtTime(0, t0 + dur);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.01);
+  }
+  // 每帧调用：从“还早”进入 warn / shift 时响一次。换了挡、或转速明显回落后才重新上膛
+  let toneGear = null;
+  function shiftToneTick(state, f, sh, rpm) {
+    if (!toneArmed && (f.gear !== toneGear || !sh || rpm < sh.now * TONE_REARM)) toneArmed = true;
+    if (!state || !toneArmed) return;
+    if (!settings.shiftTone || !num(f.throttle) || f.throttle < TONE_MIN_THROTTLE) return;
+    toneArmed = false;
+    toneGear = f.gear;
+    beep();
+  }
+  function renderToneInfo() {
+    for (const b of document.querySelectorAll("#set-tone button")) b.classList.toggle("on", b.dataset.v === (settings.shiftTone ? "on" : "off"));
+    let hint = "转速条变黄时“哔”一声（已经按反应时间提前了，听到就换）。";
+    if (settings.shiftTone && !(window.AudioContext || window.webkitAudioContext)) hint = "这个浏览器不支持网页声音。";
+    else if (settings.shiftTone && (!audioCtx || audioCtx.state !== "running")) hint = "刷新页面后要先点一下屏幕才能出声。";
+    setText($("tone-hint"), hint);
+  }
+  // 浏览器要求先有用户操作：开着提示音时，每次点屏幕都顺手确认一下声音可用
+  document.addEventListener("pointerdown", () => { if (settings.shiftTone) ensureAudio(); });
+  $("set-tone").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    settings.shiftTone = b.dataset.v === "on";
+    saveSettings();
+    if (settings.shiftTone && ensureAudio()) {
+      // resume() 是异步的：恢复后试听一声，让人知道音量多大
+      const ctx = audioCtx;
+      (ctx.state === "running" ? Promise.resolve() : ctx.resume()).then(() => { beep(); renderToneInfo(); }).catch(() => renderToneInfo());
+    }
+    renderToneInfo();
+  });
+
   function renderShiftInfo() {
     if (power && power.shift_rpm && Object.keys(power.shift_rpm).length) {
       const gears = Object.keys(power.shift_rpm).sort((a, b) => Number(a) - Number(b));
