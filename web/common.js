@@ -160,7 +160,10 @@
         const age = s.since_last_packet;
         const dot = age === null ? "" : age < 2 ? "on" : "stale";
         const txt = age === null ? "无数据" : age < 2 ? `${s.game_name || ""} ${Math.round(s.pps)} 包/秒` : `${Math.round(age)} 秒没收到包`;
-        st.innerHTML = `<span class="status-dot ${dot}"></span>${txt}`;
+        // 局域网设备没扫过“连接手机”页的二维码：只能看不能改（见 forza/access.py）
+        const ro = s.can_write === false
+          ? ` · <a href="/connect.html" title="这台设备只能看、不能改数据：在电脑上打开“连接手机”页，用手机扫一次二维码">只读</a>` : "";
+        st.innerHTML = `<span class="status-dot ${dot}"></span>${txt}${ro}`;
       } catch (_) {
         st.innerHTML = `<span class="status-dot"></span>服务未连接`;
       }

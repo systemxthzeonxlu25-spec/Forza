@@ -9,3 +9,5 @@ db_path = "data/forza.db"
 rec_dir = "recordings"
 record_buffer_minutes = 10   # 内存里保留最近几分钟原始包，实时面板菜单可“保存刚才 N 分钟”（0 = 关闭）
 # forward = ["127.0.0.1:20777"]   # 同时把原始包转发给 SimHub 等其他程序
+lan_access = "key"       # "key"：局域网里的手机扫过“连接手机”页的二维码才能改数据，其他设备只能看；"open"：谁都能改
+# allowed_hosts = ["mypc.lan"]   # 除了 IP / localhost / 机器名 / *.local 以外，还想用哪些主机名打开网页

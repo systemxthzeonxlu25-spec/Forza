@@ -91,7 +91,7 @@ def diagnose_laps(request: Request, ids: str = Query(..., description="逗号分
 @router.get("/tuning/rules")
 def tuning_rules():
     info = tuning.rules_info()
-    return {"source": info["source"], "error": info["error"], "path_hint": "Forza.exe 旁边的 tuning_rules.toml" if getattr(sys, "frozen", False) else "forza/tuning_rules.toml",
+    return {"source": info["source"], "error": info["error"], "path_hint": "程序（Forza.exe / Forza）旁边的 tuning_rules.toml" if getattr(sys, "frozen", False) else "forza/tuning_rules.toml",
             "rules": info["rules"]}
 
 

@@ -27,6 +27,8 @@
 
 **最省事：下载打包版**。到 GitHub 的 [Releases](../../releases) 下载 `Forza-版本号-windows.zip`，解压后双击 `Forza\Forza.exe` 就能用，不用装 Python。参数和下面的 `start.bat` 一样，例如 `Forza.exe --game fh6 --record`。`config.toml`、数据库（`data\`）和录像（`recordings\`）都放在 `Forza.exe` 旁边，升级时把这几个复制到新文件夹里就行。
 
+游戏本身在 Windows / Xbox 上跑，但本工具也可以放在局域网里另一台 Mac 或 Linux 电脑上（游戏的 Data Out IP 填那台电脑的地址）。Releases 里也有 `Forza-版本号-macos.tar.gz` 和 `Forza-版本号-linux.tar.gz`，解压后在终端运行 `Forza/Forza`。macOS 的包没有签名，第一次运行前先执行 `xattr -dr com.apple.quarantine Forza`，不然系统会拦着不让打开。
+
 想跑源码（或者要改代码）就按下面的步骤：
 
 1. 装 **Python 3.11 或更新版本**（[python.org](https://www.python.org/downloads/)，安装时勾选 *Add python.exe to PATH*）。
@@ -106,7 +108,12 @@ FH6 官方文档要求**避开 5200–5300**，因为游戏自己会占用这一
      ```
 
    - 确认当前网络是"专用网络"：设置 → 网络和 Internet → WLAN / 以太网 → 网络配置文件类型 → 专用。
-4. 面板右上角有全屏按钮。局域网 http 页面一般没法阻止手机息屏，建议把手机的自动锁屏时间调长。iPhone 的 Safari 不支持网页全屏，可以用"添加到主屏幕"后从桌面图标打开。
+4. **修改权限**：同一个 Wi-Fi 里谁都能打开页面，所以默认只有本机和"扫过码的手机"能改数据（删圈、改名、开关录制、记调校版本），其他设备只能看，导航栏会显示"只读"。
+   - 手机用"连接手机"页的二维码打开一次（或者照着终端里"手机浏览器"那行带 `?key=` 的地址输入）就有权限了，换电脑 IP、重启程序都不用重扫。
+   - 钥匙存在数据库旁边的 `data/access_key.txt`，删掉它再重启就换一把，之前扫过的设备全部失效。
+   - 只在自己家里用、嫌麻烦的话，在 `config.toml` 里写 `lan_access = "open"` 回到谁都能改。
+   - 网页只认 IP 地址、`localhost`、机器名和 `.local` 结尾的地址（防 DNS 重绑定攻击）。想用路由器给的名字（比如 `mypc.lan`）打开，就加进 `config.toml` 的 `allowed_hosts`。
+5. 面板右上角有全屏按钮。局域网 http 页面一般没法阻止手机息屏，建议把手机的自动锁屏时间调长。iPhone 的 Safari 不支持网页全屏，可以用"添加到主屏幕"后从桌面图标打开。
 
 ### 实时面板上都有什么
 
@@ -162,7 +169,7 @@ python -m forza fake --format fh --scenario sprint   # Horizon 冲刺赛假数�
 | 323 / 324 | **Forza Horizon 4 / 5 / 6** | Sled + 12 字节 Horizon 专有字段 + Dash（+1 字节尾巴） |
 | 331 | **Forza Motorsport (2023)** Car Dash | Sled + Dash + 四轮磨损 + 赛道 ID |
 
-- 324 字节的包分不出是 FH4、FH5 还是 FH6。它们共用 Dash 偏移，但不能据此认定所有字段类型都一样：FH6 官方把积水定义为 S32 标志、CarGroup 定义为 U32。请明确传 `--game fh6`，程序才应用这些类型；FH4/5 保留现有解释，仍需真实采样核对。
+- 324 字节的包分不出是 FH4、FH5 还是 FH6。它们共用 Dash 偏移，但不能据此认定所有字段类型都一样：FH6 官方把积水定义为 S32 标志、CarGroup 定义为 U32。请明确传 `--game fh6`，程序才应用这些类型；FH4/5 保留现有解释，仍需真实采样核对。不传也能正常用：车速、圈速、调车诊断都不受影响，只是游戏名显示成“Forza Horizon（4/5/6）”。但要定下来一种用法（最好在 `config.toml` 里写 `game = "fh6"`），别一会儿传一会儿不传：圈是按游戏分开存的，混着来的话 PB 和历史圈会被分成“fh”和“fh6”两份。
 - FH3 及更早、FM6 及更早**没有 Data Out**，用不了这个工具。
 - **没见过的包长**：用"Speed 字段 ≈ 速度向量长度"探测两个 Dash 偏移。至少 20 次通过且领先另一候选 5 票后才启用 Dash；此前仅输出公共 Sled 字段。这个校验不能证明新增字段的含义，所以未知长度的 FM 包不读取磨损和赛道 ID，也不自动认定为 FM2023。已知长度仍持续校验布局。
 - 胎温：官方文档原文没能确认单位，社区共识是华氏度，程序默认按 °F 转成 °C。如果发现明显不对，可以用 `--tire-unit C` 或 `config.toml` 改。
@@ -314,7 +321,15 @@ pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-打包 exe：`pip install pyinstaller` 后在仓库根目录跑 `pyinstaller packaging/forza.spec`，结果在 `dist/Forza/`。发版本：推一个 `v` 开头的 tag（`git tag v0.2.0 && git push origin v0.2.0`），GitHub Actions（`.github/workflows/release.yml`）会在 Windows 上打包、冒烟测试，然后把 zip 发到 Releases。
+网页冒烟测试（`tests/test_web_smoke.py`，用无头 Chromium 打开各页面，查脚本报错、实时面板、圈速对比、手机宽度不横向滚动）需要另外装 playwright，没装时自动跳过：
+
+```powershell
+pip install playwright
+python -m playwright install chromium
+python -m pytest -q tests/test_web_smoke.py
+```
+
+打包 exe：`pip install pyinstaller` 后在仓库根目录跑 `pyinstaller packaging/forza.spec`，结果在 `dist/Forza/`。发版本：推一个 `v` 开头的 tag（`git tag v0.2.0 && git push origin v0.2.0`），GitHub Actions（`.github/workflows/release.yml`）会在 Windows / macOS / Linux 上各打一个包、冒烟测试，然后把三个包都发到 Releases。
 
 目录结构：
 

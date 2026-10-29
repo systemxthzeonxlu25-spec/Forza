@@ -30,3 +30,21 @@ jobs:
           cache-dependency-path: requirements*.txt
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
+
+  # 网页冒烟测试（tests/test_web_smoke.py）：真起一个服务，用无头 Chromium 打开各页面。
+  # 上面的 pytest 任务没装 playwright，这个测试会自动跳过；这里装上并要求必须跑（FORZA_WEB_TESTS=1）
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt playwright==1.64.1
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m pytest -q tests/test_web_smoke.py
+        env:
+          FORZA_WEB_TESTS: "1"

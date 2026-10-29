@@ -13,3 +13,4 @@ config.toml
 *.db-shm
 /build/
 /dist/
+access_key.txt

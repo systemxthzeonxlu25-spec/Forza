@@ -12,8 +12,6 @@
 """
 from __future__ import annotations
 
-from urllib.parse import urlsplit
-
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +22,7 @@ from .api import powertrain as powertrain_api
 from .api import record as record_api
 from .api import sectors as sectors_api
 from .api import setups as setups_api
+from .access import AccessGuard, can_write, is_local_client
 from .api import tuning as tuning_api
 from .config import WEB_DIR
 
@@ -31,21 +30,9 @@ from .config import WEB_DIR
 def create_app(rt) -> FastAPI:
     app = FastAPI(title="Forza 遥测", docs_url="/api/docs", redoc_url=None)
     app.state.rt = rt
-
-    @app.middleware("http")
-    async def _same_origin_only(request: Request, call_next):
-        """拦住别的网站发来的写操作（跨站请求伪造）。
-
-        本工具在局域网里没有登录，任何网页都能让浏览器往 http://localhost:8000 发 POST：
-        比如停掉录制、反复“保存刚才 10 分钟”把磁盘塞满。浏览器发跨站的 POST / PATCH / DELETE 时
-        一定会带 Origin 头，所以只要 Origin 的主机和端口跟请求的 Host 对不上，就拒绝。
-        自己的网页（同源）和 curl / 脚本（不带 Origin）都不受影响。
-        """
-        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-            origin = request.headers.get("origin")
-            if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
-                return JSONResponse({"detail": "不接受来自其他网站的修改请求"}, status_code=403)
-        return await call_next(request)
+    # 防 DNS 重绑定 + 跨站请求伪造 + 局域网设备改数据要钥匙（见 forza/access.py）
+    extra_hosts = frozenset(h.strip().lower().rstrip(".") for h in (rt.cfg.allowed_hosts or []))
+    app.add_middleware(AccessGuard, get_settings=lambda: (rt.access_key, rt.cfg.lan_access, extra_hosts))
 
     @app.exception_handler(OverflowError)
     async def _too_big(request: Request, exc: OverflowError):
@@ -56,7 +43,13 @@ def create_app(rt) -> FastAPI:
     # 普通 def 路由会被 FastAPI 丢进线程池，和收包并发读写，偶尔会撞上“deque mutated during iteration”。
     @app.get("/api/status")
     async def status(request: Request):
-        return request.app.state.rt.status()
+        st = request.app.state.rt.status()
+        st["can_write"] = can_write(request)
+        st["lan_access"] = rt.cfg.lan_access
+        # 钥匙只告诉本机打开的网页（“连接手机”页拿它生成二维码），局域网设备拿不到
+        if is_local_client(request.client.host if request.client else None):
+            st["access_key"] = rt.access_key
+        return st
 
     app.include_router(live_api.router)
     app.include_router(laps_api.router)

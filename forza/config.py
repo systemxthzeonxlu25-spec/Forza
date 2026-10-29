@@ -75,6 +75,8 @@ _FIELD_HINTS = {
     "tire_temp_unit": '只能是 "F" 或 "C"',
     "live_hz": "要是 > 0 的数字", "record_buffer_minutes": "要是 ≥ 0 的数字（0 = 关闭）",
     "forward": '要是字符串列表，例如 ["127.0.0.1:20777"]',
+    "lan_access": '只能是 "key"（局域网设备扫码后才能改数据）或 "open"（谁都能改）',
+    "allowed_hosts": '要是字符串列表，例如 ["mypc.lan"]',
 }
 
 
@@ -98,6 +100,11 @@ class Config:
     # 内存里常驻保留最近几分钟的原始包，实时面板菜单里可以“保存刚才 N 分钟”（0 = 关闭）。
     # 每分钟大约占 1.2 MB（FM 60 包/秒）~ 2.8 MB（FH 高帧率约 140 包/秒）
     record_buffer_minutes: NonNegativeNumber = 10.0
+    # 局域网里的设备能不能改数据（删圈、改名、开关录制……）：
+    # "key" = 只有本机和扫过“连接手机”页二维码的设备能改，其他设备只能看；"open" = 谁都能改
+    lan_access: Literal["key", "open"] = "key"
+    # 除了 IP、localhost、机器名、*.local 以外，还允许用哪些主机名打开网页（例如路由器给的 "mypc.lan"）
+    allowed_hosts: list[str] | None = None
 
     def validate(self) -> None:
         """检查各项的类型和取值范围，不对就抛 ConfigError。

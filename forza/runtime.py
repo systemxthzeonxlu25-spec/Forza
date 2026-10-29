@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import frame as frame_mod
+from .access import load_access_key
 from .config import Config
 from .hub import Hub, write_packed
 from .lapdata import LapData
@@ -52,6 +53,8 @@ class Runtime:
         self.replay_speed = speed
         self.replay_loop = loop
         self.store = Store(cfg.resolve(cfg.db_path))
+        # 局域网设备改数据用的钥匙，和数据库放在一起（见 forza/access.py）
+        self.access_key = load_access_key(cfg.resolve(cfg.db_path).parent)
 
         recorder = None
         if record is not None:
@@ -242,8 +245,10 @@ class Runtime:
             lines.append(f"  UDP 监听：{c.udp_host}:{c.udp_port}")
             lines.append(f"  游戏 Data Out 填：IP = 127.0.0.1 或 {ips[0] if ips else '本机局域网 IP'}，端口 = {c.udp_port}")
         lines.append(f"  电脑浏览器：http://localhost:{c.http_port}")
+        # 带钥匙的网址：手机打开一次就能在网页上改数据（也可以在“连接手机”页扫码）
+        key_q = f"/?key={self.access_key}" if c.lan_access == "key" else ""
         for ip in ips:
-            lines.append(f"  手机浏览器：http://{ip}:{c.http_port}")
+            lines.append(f"  手机浏览器：http://{ip}:{c.http_port}{key_q}")
         if self.hub.recorder:
             lines.append(f"  正在录制：{self.hub.recorder.path}")
         lines += ["  按 Ctrl+C 退出", "=" * 56, ""]

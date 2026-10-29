@@ -1,6 +1,6 @@
 name: release
 
-# 打 v 开头的 tag（例如 git tag v0.1.0 && git push origin v0.1.0）→ 在 Windows 上打包 Forza.exe，发到 GitHub Release。
+# 打 v 开头的 tag（例如 git tag v0.1.0 && git push origin v0.1.0）→ 在 Windows / macOS / Linux 上各打一个包，发到 GitHub Release。
 # 改了打包相关的文件时 PR 上也会试打一次包（不发布），手动运行（Actions 页面 Run workflow）也只打包不发布。
 on:
   push:
@@ -11,6 +11,7 @@ on:
       - ".github/workflows/release.yml"
       - "forza/config.py"
       - "forza/tuning/rules.py"
+      - "forza/api/tuning.py"
       - "requirements.txt"
   workflow_dispatch:
 
@@ -19,8 +20,21 @@ permissions:
   contents: read
 
 jobs:
-  windows-exe:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            plat: windows
+            exe: Forza.exe
+          - os: macos-latest
+            plat: macos
+            exe: Forza
+          - os: ubuntu-latest
+            plat: linux
+            exe: Forza
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -38,9 +52,10 @@ jobs:
         shell: pwsh
         run: |
           $dir = "dist/Forza"
-          & "$dir/Forza.exe" fake -o "$dir/smoke.frec" --laps 2 --no-pause
+          $exe = Join-Path $dir "${{ matrix.exe }}"
+          & $exe fake -o "$dir/smoke.frec" --laps 2 --no-pause
           if ($LASTEXITCODE -ne 0) { throw "fake 失败" }
-          $p = Start-Process -FilePath "$dir/Forza.exe" -WorkingDirectory $dir -PassThru -NoNewWindow `
+          $p = Start-Process -FilePath $exe -WorkingDirectory $dir -PassThru -NoNewWindow `
                -ArgumentList "--no-pause","--http-port","8131","--udp-port","5701","--replay","smoke.frec"
           $ok = $false
           for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
@@ -58,21 +73,28 @@ jobs:
           Start-Sleep -Seconds 2
           Remove-Item -Recurse -Force "$dir/data", "$dir/smoke.frec", "$dir/smoke.truth.json" -ErrorAction SilentlyContinue
 
-      - name: 打 zip
+      - name: 打包（Windows 用 zip；macOS / Linux 用 tar.gz，保留可执行权限）
         shell: pwsh
         run: |
           Copy-Item README.md dist/Forza/
-          $name = if ($env:GITHUB_REF_TYPE -eq "tag") { "Forza-$env:GITHUB_REF_NAME-windows" } else { "Forza-dev-windows" }
-          Compress-Archive -Path dist/Forza -DestinationPath "$name.zip"
-          "ZIP=$name.zip" >> $env:GITHUB_ENV
+          $ver = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "dev" }
+          $name = "Forza-$ver-${{ matrix.plat }}"
+          if ("${{ matrix.plat }}" -eq "windows") {
+            Compress-Archive -Path dist/Forza -DestinationPath "$name.zip"
+            "PKG=$name.zip" >> $env:GITHUB_ENV
+          } else {
+            tar -czf "$name.tar.gz" -C dist Forza
+            if ($LASTEXITCODE -ne 0) { throw "tar 失败" }
+            "PKG=$name.tar.gz" >> $env:GITHUB_ENV
+          }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: forza-windows
-          path: ${{ env.ZIP }}
+          name: forza-${{ matrix.plat }}
+          path: ${{ env.PKG }}
 
   publish:
-    needs: windows-exe
+    needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -80,8 +102,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: forza-windows
+          pattern: forza-*
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: Forza-*-windows.zip
+          files: |
+            Forza-*-windows.zip
+            Forza-*-macos.tar.gz
+            Forza-*-linux.tar.gz
           generate_release_notes: true

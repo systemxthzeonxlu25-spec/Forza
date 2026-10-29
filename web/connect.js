@@ -33,15 +33,30 @@
         `也可以在命令行运行 <code>ipconfig</code>，找“IPv4 地址”（一般是 192.168.x.x），手机打开 http://那个IP:${esc(port)}/</p>`;
       return;
     }
+    // 本机打开时 /api/status 会给出局域网修改钥匙：二维码网址带上它，手机扫一次就能改数据
+    const key = st.access_key ? `?key=${encodeURIComponent(st.access_key)}` : "";
     box.innerHTML = ips.map((ip) => {
-      const url = `http://${ip}:${port}/`;
+      const shown = `http://${ip}:${port}/`;
+      const url = shown + key;           // 二维码和链接带钥匙，显示的文字不带（太长，也免得被截图带走）
       const here = ip === location.hostname;
       return `<div class="url-item${here ? " here" : ""}">` +
         `<div class="qr">${qrSvg(url)}</div>` +
-        `<a href="${esc(url)}">${esc(url)}</a>` +
+        `<a href="${esc(url)}">${esc(shown)}</a>` +
         (here ? `<span class="tag">你现在打开的就是这个地址</span>` : "") +
         `</div>`;
-    }).join("");
+    }).join("") + accessNote(st);
+  }
+
+  function accessNote(st) {
+    if (st.lan_access !== "key") return "";
+    if (st.access_key) {
+      return `<p class="muted" style="flex-basis:100%;margin:0">二维码里带着修改钥匙：用它打开过的手机可以删圈、改名、开关录制；` +
+        `只手动输入地址的设备只能看。钥匙存在数据库旁边的 access_key.txt，删掉它重启就换一把新的。</p>`;
+    }
+    if (st.can_write === false) {
+      return `<p class="warn" style="flex-basis:100%;margin:0">这台设备现在只能看、不能改数据：在电脑上打开这一页，用这台设备扫一次二维码就行。</p>`;
+    }
+    return "";
   }
 
   function renderGameTable(st) {
